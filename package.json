@@ -1,7 +1,7 @@
 {
   "name": "cline-pass-switcher",
-  "version": "1.2.0",
-  "description": "Cline Pass 上游控制台：枚举/校验/钉住订阅模型背后的上游渠道，账号池轮询，OpenAI 兼容代理（零依赖 Node）",
+  "version": "2.0.0",
+  "description": "Cline Pass 上游控制台：枚举/校验/钉住订阅模型背后的上游渠道，账号池轮询，OpenAI 兼容代理（React + Mantine 控制台，服务端零依赖可回退）",
   "private": false,
   "license": "MIT",
   "type": "module",
@@ -9,6 +9,26 @@
     "node": ">=18"
   },
   "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
     "start": "node server.js"
+  },
+  "dependencies": {
+    "@mantine/core": "^7.15.0",
+    "@mantine/hooks": "^7.15.0",
+    "@mantine/notifications": "^7.15.0",
+    "@tabler/icons-react": "^3.20.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "typescript": "^5.5.0",
+    "vite": "^5.4.0"
   }
 }

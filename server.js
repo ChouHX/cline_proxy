@@ -16,6 +16,11 @@ const DATA_DIR = process.env.DATA_DIR || __dirname;
 const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
 const META_PATH = path.join(DATA_DIR, 'metadata.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
+// React 控制台（Vite 产物）。存在 dist/index.html 时启用 SPA + 路由守卫；
+// 否则回退到 public/index.html 的旧零依赖控制台，保证 `node server.js` 仍可直接跑。
+const DIST_DIR = path.join(__dirname, 'dist');
+const DIST_INDEX = path.join(DIST_DIR, 'index.html');
+const hasDist = () => fs.existsSync(DIST_INDEX);
 
 const DEFAULT_CONFIG = {
   port: 3123,
@@ -429,6 +434,11 @@ function record(modelId, info) {
 // ---------- 聊天代理 ----------
 const CHAT_PATHS = new Set(['/chat/completions', '/v1/chat/completions', '/api/v1/chat/completions']);
 
+// 由服务端自己实现的路径。静态资源与 SPA fallback 必须跳过它们，
+// 否则 GET /models（代理的模型列表）会被前端 index.html 吞掉。
+const isServerRoute = (p) =>
+  p.startsWith('/api/') || p.startsWith('/v1/') || CHAT_PATHS.has(p) || p === '/models';
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -742,6 +752,54 @@ async function handleChat(req, res) {
 }
 
 // ---------- HTTP 服务 ----------
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.txt': 'text/plain; charset=utf-8',
+};
+
+// 把请求路径限制在 root 之内，挡掉 ../ 之类的目录穿越
+function safeJoin(root, urlPath) {
+  let rel;
+  try {
+    rel = decodeURIComponent(urlPath);
+  } catch {
+    return null;
+  }
+  const target = path.normalize(path.join(root, rel));
+  if (target !== root && !target.startsWith(root + path.sep)) return null;
+  return target;
+}
+
+function sendFile(res, file) {
+  let data;
+  try {
+    data = fs.readFileSync(file);
+  } catch {
+    return sendJSON(res, 404, { error: { message: 'not found' } });
+  }
+  res.writeHead(200, {
+    'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+    // 构建产物带内容哈希，可长缓存；index.html 必须每次校验，否则前端发版后拿不到新资源
+    'Cache-Control': path.basename(file) === 'index.html' ? 'no-cache' : 'public, max-age=31536000, immutable',
+  });
+  res.end(data);
+}
+
 function sendJSON(res, status, obj) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
   res.end(JSON.stringify(obj));
@@ -768,14 +826,48 @@ const server = http.createServer(async (req, res) => {
   }
   try {
     if (req.method === 'GET' && p === '/api/meta') {
-      return sendJSON(res, 200, { authRequired: !!PROXY_KEY, proxyBase: publicProxyBase(), configured: isConfigured() });
+      return sendJSON(res, 200, {
+        authRequired: !!PROXY_KEY,
+        proxyBase: publicProxyBase(),
+        configured: isConfigured(),
+        uiMode: hasDist() ? 'react' : 'legacy',
+      });
+    }
+    // 登录入口必须排在鉴权检查之前：还没有凭据的人正是要访问它的人。
+    // 控制台凭据与下游代理密钥同源（proxyKey），轮换密钥即同时轮换两者。
+    if (req.method === 'POST' && p === '/api/auth/login') {
+      const raw = await readBody(req).then((b) => b.toString());
+      let body = {};
+      try { body = raw ? JSON.parse(raw) : {}; } catch { return sendJSON(res, 400, { ok: false, error: { message: 'invalid JSON body' } }); }
+      const key = String(body.key || '').trim();
+      // 未配置 proxyKey 时鉴权本就是关闭的，登录门没有可校验的对象，直接放行
+      if (!PROXY_KEY) return sendJSON(res, 200, { ok: true, authRequired: false });
+      if (key && key === PROXY_KEY) return sendJSON(res, 200, { ok: true, authRequired: true });
+      return sendJSON(res, 401, { ok: false, authRequired: true, error: { message: '密钥错误，请重试' } });
     }
     if (p.startsWith('/api/') || p.startsWith('/v1/') || CHAT_PATHS.has(p)) {
       if (!authOK(req)) return unauthorized(res);
     }
-    if (req.method === 'GET' && (p === '/' || p === '/index.html')) {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(fs.readFileSync(path.join(PUBLIC_DIR, 'index.html')));
+    // 能走到这里说明凭据已通过校验；这是路由守卫用来确认登录态的服务端真相
+    if (req.method === 'GET' && p === '/api/auth/session') {
+      return sendJSON(res, 200, { ok: true, authRequired: !!PROXY_KEY });
+    }
+    // 静态资源：优先 dist（React 控制台），无构建产物则回退 public 下的旧控制台。
+    // 只接管服务端没有实现的路径，避免把 /models 这类代理端点误当成前端路由。
+    if (req.method === 'GET' && !isServerRoute(p)) {
+      if (hasDist()) {
+        const wanted = p === '/' ? 'index.html' : p;
+        const file = safeJoin(DIST_DIR, wanted);
+        // safeJoin 返回 null 表示路径越出了 dist（../ 之类），直接拒绝，
+        // 不要交给 SPA fallback，否则穿越尝试会拿到 200 + HTML
+        if (!file) return sendJSON(res, 404, { error: { message: 'not found' } });
+        if (fs.existsSync(file) && fs.statSync(file).isFile()) return sendFile(res, file);
+        // SPA fallback：/dashboard 这类前端路由在服务端并不存在实体文件，
+        // 直接刷新时必须把 index.html 交给前端路由接管，否则会 404
+        return sendFile(res, DIST_INDEX);
+      }
+      if (p === '/' || p === '/index.html') return sendFile(res, path.join(PUBLIC_DIR, 'index.html'));
+      return sendJSON(res, 404, { error: { message: `no route: ${req.method} ${p}` } });
     }
     if (req.method === 'GET' && p === '/api/models') {
       const cat = await catalog();

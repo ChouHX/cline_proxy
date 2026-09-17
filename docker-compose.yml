@@ -8,4 +8,4 @@ services:
     volumes:
       - ./data:/data
     ports:
-      - "127.0.0.1:3123:3123"
+      - "0.0.0.0:3123:3123"

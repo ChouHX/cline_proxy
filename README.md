@@ -4,7 +4,9 @@
 ![Node](https://img.shields.io/badge/node-%E2%89%A5%2018-green)
 ![Docker](https://img.shields.io/badge/docker-ready-2496ED)
 
-**零依赖**的 Node.js 本地/服务器代理 + 网页控制台，用于 [Cline Pass](https://cline.bot/cline-pass) 订阅：
+Node.js 本地/服务器代理 + 网页控制台，用于 [Cline Pass](https://cline.bot/cline-pass) 订阅。
+服务端 `server.js` 保持**零运行时依赖**；控制台提供两套可选前端——React + Mantine 的 SPA（需 `npm run build`），
+以及内置的零依赖静态页面（未构建时自动回退，`node server.js` 依然开箱即用）：
 
 - 🔍 **上游枚举与校验** —— 列出订阅模型背后每一条上游渠道，并一键实测哪些「✔可用 / ⏳限流 / ✘不可钉」
 - 🎯 **精确钉住上游** —— 严格钉住 / 优先+回退两种模式，支持按最低成本、最快首字、最高吞吐排序
@@ -14,6 +16,7 @@
 - 📊 **观测** —— 每条请求自动记录实际命中的渠道、背后模型、耗时（含流式）
 - 🔑 **代理密钥** —— 给下游客户端发一把独立密钥，可随时在页面轮换
 - 🌐 **OpenAI 兼容** —— 任何 OpenAI 客户端 / Cline 扩展把 Base URL 指向代理即可，无侵入
+- 🔒 **登录门 + 路由守卫** —— React 控制台的 `/dashboard/*` 全部位于守卫之内，未通过服务端凭据校验无法进入；登录后原路返回，401 自动退回登录页
 
 ![控制台截图](docs/screenshot-top.png)
 
@@ -27,8 +30,35 @@ cd cline-pass-switcher
 node server.js        # 仅需 Node ≥ 18，无需 npm install
 ```
 
-打开 <http://127.0.0.1:3123/>，在「账号管理」里添加你的 Cline Pass 账号（`sk_` 开头的 key）并保存即可。
+打开 <http://127.0.0.1:3123/>，在「账号池」里添加你的 Cline Pass 账号（`sk_` 开头的 key）并保存即可。
 没有 key 也能启动：页面会提示配置入口。
+
+> 未构建前端时，服务端自动使用 `public/index.html` 里的内置零依赖控制台，功能完整。
+> 想要 React + Mantine 版控制台（含路由守卫），见下一节。
+
+### 构建 React 控制台（可选，推荐）
+
+```bash
+npm install
+npm run build         # 产物输出到 dist/
+node server.js        # 检测到 dist/index.html 即自动切换到 React 控制台
+```
+
+开发模式（Vite 热更新，API 自动代理到 3123）：
+
+```bash
+node server.js        # 终端 A：后端
+npm run dev           # 终端 B：前端 http://localhost:5173
+```
+
+| 命令 | 作用 |
+|---|---|
+| `npm run dev` | Vite 开发服务器，`/api` 与 `/v1` 反代到 `127.0.0.1:3123` |
+| `npm run build` | 构建到 `dist/`（不做类型检查，保证产物优先产出） |
+| `npm run typecheck` | 单独跑 `tsc` 类型检查 |
+| `npm start` | 启动 `server.js` |
+
+> 两种控制台的登录凭据完全一致（服务端 `proxyKey`），升级后无需重新登录。
 
 > Cline Pass key 从哪里来？购买 Cline Pass 订阅后，在 Cline 的账户设置里创建 API Key。
 > 订阅模型 ID 均为 `cline-pass/*` 前缀（如 `cline-pass/glm-5.2`）。
@@ -40,6 +70,46 @@ Base URL: http://127.0.0.1:3123/v1
 API Key:  （在控制台「访问与安全」里设置代理密钥；本地留空 = 不鉴权）
 Model:    cline-pass/glm-5.2 等
 ```
+
+---
+
+## 控制台路由与访问控制
+
+React 控制台采用 **登录门 + 路由守卫** 结构：
+
+| 路由 | 说明 |
+|---|---|
+| `/login` | 登录页。已登录用户访问会直接跳进控制台 |
+| `/dashboard` | 受保护区域入口，重定向到 `/dashboard/overview` |
+| `/dashboard/overview` | 概览：订阅/目录模型数、账号池、鉴权状态、最近请求 |
+| `/dashboard/models` | 订阅模型：上游优先级/排除、钉住模式、探测/测试/校验 |
+| `/dashboard/accounts` | 账号池：增删改、逐账号连通性测试、单账号/轮询 |
+| `/dashboard/playground` | 测试台：任选模型+上游发小请求，回读实际命中渠道 |
+| `/dashboard/history` | 请求历史：账号、实际上游、耗时、逐次尝试路径 |
+| `/dashboard/catalog` | 模型目录：Cline 公开目录，`:free` 变体可精确钉住 |
+| `/dashboard/security` | 访问与安全：代理密钥、公网地址、目录模型暴露开关 |
+
+守卫行为：
+
+- 未通过校验访问任意 `/dashboard/*` → 重定向到 `/login?redirect=<原路径>`，登录后**原路返回**；
+- 已登录访问 `/login` → 直接跳进控制台，不再显示登录表单；
+- 登录态由服务端 `GET /api/auth/session` 确认，**不是**只看 localStorage——伪造本地存储无法绕过；
+- 任意 API 返回 `401`（例如服务端轮换了密钥）→ 前端立即清除凭据并退回登录页；
+- 服务端未设置 `proxyKey`（鉴权关闭）时，`/api/meta` 返回 `authRequired: false`，守卫直接放行——此时登录门本就不拦截任何数据，页面会明确提示「未启用鉴权」。
+
+服务端配套端点：
+
+```
+POST /api/auth/login     { key }  → 校验控制台凭据（免鉴权，登录入口）
+GET  /api/auth/session            → 确认当前凭据是否有效（需鉴权）
+GET  /api/meta                    → { authRequired, proxyBase, configured, uiMode }
+```
+
+`uiMode` 会返回 `react`（检测到 `dist/index.html`）或 `legacy`（回退内置页面），便于排查前端产物是否生效。
+
+> SPA 路由由 `server.js` 的 fallback 兜底：`/dashboard/*` 这类前端路由在服务端没有实体文件，
+> 直接刷新页面时服务端会返回 `index.html` 交给前端路由接管，不会 404。
+
 
 ---
 
@@ -150,15 +220,20 @@ Cline Pass 订阅模型在 Cline 网关之后分成两条管道，钉住上游�
 
 ## 控制台功能一览
 
-| 卡片 | 功能 |
+React 控制台按页面组织（旧版单页控制台功能等价，卡片名对应如下）：
+
+| 页面 | 功能 |
 |---|---|
-| 账号管理 | 账号池增删改、显隐密钥、逐账号连通性测试、单账号/轮询模式、用量统计 |
-| 访问与安全 | 修改下游代理密钥（即时生效）、公网代理地址、鉴权开关 |
-| 订阅模型 | 背后模型 / 渠道数 / 最近实际渠道；渠道下拉（带可用性标注）；严格钉住 / 优先+回退；排序 |
-| 操作按钮 | 探测（刷新渠道清单）、测试（单次钉住验证）、校验（全渠道实测地图） |
+| 概览 | 订阅/目录模型数、账号池规模、鉴权状态、代理接入地址（一键复制）、最近请求 |
+| 订阅模型 | 背后模型 / 渠道数 / 最近实际渠道；渠道优先级与排除面板；严格钉住 / 优先+回退；成本·首字·吞吐排序 |
+| 订阅模型 · 操作 | 探测（刷新渠道清单）、测试（单次钉住验证）、校验（全渠道实测地图）、批量探测、拉取官方最新模型 |
+| 账号池 | 账号增删改、显隐密钥、逐账号连通性测试、单账号/轮询模式、用量统计 |
 | 测试台 | 任选模型+渠道发一条小请求，直接看网关是否采纳 |
 | 请求历史 | 自动记录每条请求的账号、实际渠道、耗时、尝试序列（最近 100 条，含流式） |
-| 完整目录 | Cline 公开目录模型，`:free` 变体可精确钉住 |
+| 模型目录 | Cline 公开目录模型，`:free` 变体可精确钉住 |
+| 访问与安全 | 修改下游代理密钥（即时生效）、公网代理地址、目录模型暴露开关 |
+
+> 前端轮换密钥后会同步本机保存的凭据并重新校验登录态，不会把操作者锁在控制台之外。
 
 代理同时做了兼容性标准化：解包 Cline 的 `{"data":...}` 包装为标准 OpenAI 格式、错误统一为
 `{"error":{"message":...}}`、附加 `X-Cline-Target-Upstream / X-Cline-Actual-Upstream / X-Cline-Account` 等响应头。
