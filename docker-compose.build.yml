@@ -1,16 +1,14 @@
-# 拉取预构建镜像运行（本地不构建源码）
-#   docker compose -f docker-compose.ghcr.yml up -d
+# 从源码本地构建并运行：改完代码后
+#   docker compose -f docker-compose.build.yml up -d --build
 #
-# 指定版本（默认 latest）：
-#   IMAGE_TAG=sha-df2e52b docker compose -f docker-compose.ghcr.yml up -d
+# 默认方式（拉取预构建镜像）：
+#   docker compose up -d
 #
-# 注意：与 docker-compose.yml 共用同一个 container_name，
-# 两种方式之间切换前先执行 `docker compose down`。
-#
-# 需要一个性化 HTTPS 反代请在外部自行处理，指向本机 3123 端口即可。
+# 注意：两者共用同一个 container_name，互相切换前先用对应文件执行
+#   docker compose [-f docker-compose.build.yml] down
 services:
   cline-pass-console:
-    image: ghcr.io/chouhx/cline_proxy:${IMAGE_TAG:-latest}
+    build: .
     container_name: cline-pass-console
     restart: unless-stopped
     environment:

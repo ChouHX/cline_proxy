@@ -116,32 +116,34 @@ GET  /api/meta                    → { authRequired, proxyBase, configured, uiM
 
 ## Docker 部署
 
-仓库根目录提供两个 compose，按需二选一：
+仓库根目录提供两个 compose：
 
 | 文件 | 用途 |
 |---|---|
-| `docker-compose.yml` | **本地构建运行**——从源码构建镜像，改完代码 `--build` 重建 |
-| `docker-compose.ghcr.yml` | **拉取预构建镜像运行**——不构建源码，直接用 GHCR 上的镜像 |
+| `docker-compose.yml` | **拉取预构建镜像运行**（默认，免去本地构建） |
+| `docker-compose.build.yml` | **从源码本地构建运行**（改完代码 `--build` 重建） |
 
 ```bash
 mkdir -p data && cp config.example.json data/config.json
 # 编辑 data/config.json，或用下面的环境变量注入 key
 ```
 
-方式 A：本地构建运行
+方式 A：拉取预构建镜像（默认）
 
 ```bash
-docker compose up -d --build
-```
-
-方式 B：拉取预构建镜像（推荐，免去本地构建）
-
-```bash
-docker compose -f docker-compose.ghcr.yml up -d
+docker compose up -d
 
 # 指定版本（默认 latest）
-IMAGE_TAG=sha-02e98c2 docker compose -f docker-compose.ghcr.yml up -d
+IMAGE_TAG=sha-fbaccc6 docker compose up -d
 ```
+
+方式 B：本地构建运行
+
+```bash
+docker compose -f docker-compose.build.yml up -d --build
+```
+
+> 两者共用同一个 `container_name`，互相切换前先用对应文件执行 `docker compose down`。
 
 镜像同时支持 `linux/amd64` 与 `linux/arm64`，见
 <https://github.com/ChouHX/cline_proxy/pkgs/container/cline_proxy>。
