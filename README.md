@@ -146,25 +146,9 @@ IMAGE_TAG=sha-02e98c2 docker compose -f docker-compose.ghcr.yml up -d
 镜像同时支持 `linux/amd64` 与 `linux/arm64`，见
 <https://github.com/ChouHX/cline_proxy/pkgs/container/cline_proxy>。
 
-### 可选：自动 HTTPS（Caddy）
+### 方式 C：自备反向代理（nginx 等）
 
-两个 compose 都内置了 Caddy 服务，**默认不启动**，加 `--profile caddy` 才拉起：
-
-```bash
-# 有域名（A 记录指向服务器，自动签发 Let's Encrypt 受信证书）
-CPASS_DOMAIN=pass.example.com docker compose --profile caddy up -d --build
-
-# 只有 IP（自签证书，浏览器需手动信任一次）
-docker compose --profile caddy up -d --build
-```
-
-访问 `https://你的域名/`（或 `https://服务器IP/`）。Caddy 配置在根目录 `Caddyfile`，反代目标为服务名 `app:3123`。
-
-> 启用 Caddy 后，建议把 app 的端口映射改成 `"127.0.0.1:3123:3123"`，避免绕过 HTTPS 直连。
-
-### 方式 C：自备反代（nginx 门户等）
-
-只暴露本机端口，由你现有的 nginx/Caddy 做 TLS：
+只暴露本机端口，由你自己的反向代理做 TLS：
 
 ```nginx
 location / {
