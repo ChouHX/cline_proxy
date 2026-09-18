@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    # 纯文档 / compose 改动不影响镜像内容，跳过构建
+    paths-ignore:
+      - '**.md'
+      - 'docker-compose*.yml'
+      - 'Caddyfile'
+      - '.gitignore'
+      - 'LICENSE'
   workflow_dispatch:
 
 env:

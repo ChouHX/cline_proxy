@@ -1,15 +1,14 @@
 # 本地构建运行：改完源码后 `docker compose up -d --build` 即可
 #
-# 改用预构建镜像（不构建源码）：
+# 改用预构建镜像（不在本地构建源码）：
 #   docker compose -f docker-compose.ghcr.yml up -d
 #
 # 需要 HTTPS（Caddy 自动证书）：
 #   CPASS_DOMAIN=pass.example.com docker compose --profile caddy up -d --build   # 域名
 #   docker compose --profile caddy up -d --build                                  # 仅 IP，自签证书
 services:
-  app:
+  cline-pass-console:
     build: .
-    image: cline-pass-switcher:local
     container_name: cline-pass-console
     restart: unless-stopped
     environment:
@@ -36,7 +35,7 @@ services:
     profiles: [caddy]
     restart: unless-stopped
     depends_on:
-      - app
+      - cline-pass-console
     ports:
       - "80:80"
       - "443:443"

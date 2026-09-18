@@ -2,5 +2,5 @@
 # 由 docker-compose 的 caddy 服务（profile: caddy）挂载使用。
 {$CPASS_DOMAIN:localhost} {
 	tls {$CPASS_TLS_EMAIL:internal}
-	reverse_proxy app:3123
+	reverse_proxy cline-pass-console:3123
 }
