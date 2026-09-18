@@ -9,6 +9,7 @@ on:
       - '**.md'
       - 'docker-compose*.yml'
       - 'Caddyfile'
+      - 'cleanup.sh'
       - '.gitignore'
       - 'LICENSE'
   workflow_dispatch:
