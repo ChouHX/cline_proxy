@@ -116,24 +116,55 @@ GET  /api/meta                    → { authRequired, proxyBase, configured, uiM
 
 ## Docker 部署
 
-### 方式 A：All-in-one（自带 Caddy 自动 HTTPS，推荐新手）
+仓库根目录提供两个 compose，按需二选一：
+
+| 文件 | 用途 |
+|---|---|
+| `docker-compose.yml` | **本地构建运行**——从源码构建镜像，改完代码 `--build` 重建 |
+| `docker-compose.ghcr.yml` | **拉取预构建镜像运行**——不构建源码，直接用 GHCR 上的镜像 |
 
 ```bash
 mkdir -p data && cp config.example.json data/config.json
-# 编辑 data/config.json，或在启动时用环境变量注入 key
-
-# 有域名（A 记录指向服务器，自动签发 Let's Encrypt 受信证书）：
-CPASS_DOMAIN=pass.example.com docker compose -f deploy/docker-compose.all-in-one.yml up -d --build
-
-# 只有 IP（自签证书，浏览器需手动信任一次）：
-docker compose -f deploy/docker-compose.all-in-one.yml up -d --build
+# 编辑 data/config.json，或用下面的环境变量注入 key
 ```
 
-访问 `https://你的域名/`（或 `https://服务器IP/`），控制台里设置代理密钥即可对外提供服务。
+方式 A：本地构建运行
 
-### 方式 B：已有一个性化反代（nginx 门户等）
+```bash
+docker compose up -d --build
+```
 
-根目录的 `docker-compose.yml` 只启动应用并绑定 `127.0.0.1:3123`，由你现有的 nginx/Caddy 做 TLS：
+方式 B：拉取预构建镜像（推荐，免去本地构建）
+
+```bash
+docker compose -f docker-compose.ghcr.yml up -d
+
+# 指定版本（默认 latest）
+IMAGE_TAG=sha-02e98c2 docker compose -f docker-compose.ghcr.yml up -d
+```
+
+镜像同时支持 `linux/amd64` 与 `linux/arm64`，见
+<https://github.com/ChouHX/cline_proxy/pkgs/container/cline_proxy>。
+
+### 可选：自动 HTTPS（Caddy）
+
+两个 compose 都内置了 Caddy 服务，**默认不启动**，加 `--profile caddy` 才拉起：
+
+```bash
+# 有域名（A 记录指向服务器，自动签发 Let's Encrypt 受信证书）
+CPASS_DOMAIN=pass.example.com docker compose --profile caddy up -d --build
+
+# 只有 IP（自签证书，浏览器需手动信任一次）
+docker compose --profile caddy up -d --build
+```
+
+访问 `https://你的域名/`（或 `https://服务器IP/`）。Caddy 配置在根目录 `Caddyfile`，反代目标为服务名 `app:3123`。
+
+> 启用 Caddy 后，建议把 app 的端口映射改成 `"127.0.0.1:3123:3123"`，避免绕过 HTTPS 直连。
+
+### 方式 C：自备反代（nginx 门户等）
+
+只暴露本机端口，由你现有的 nginx/Caddy 做 TLS：
 
 ```nginx
 location / {
@@ -151,9 +182,10 @@ location / {
 | 变量 | 说明 |
 |---|---|
 | `CLINE_PASS_KEY` | 上游 Cline Pass API Key（无 config 时自动创建账号） |
-| `PROXY_KEY` | 下游代理密钥（客户端访问代理的凭据） |
+| `PROXY_KEY` | 控制台登录 + 下游代理共用的密钥（留空 = 完全不鉴权） |
 | `PUBLIC_BASE_URL` | 门户展示的公网代理地址，如 `https://pass.example.com` |
 | `PORT` / `BIND_HOST` / `DATA_DIR` | 端口 / 绑定地址（容器内为 0.0.0.0）/ 配置目录 |
+| `USAGE_POLL_MINUTES` | 账号额度轮询间隔（分钟，默认 5） |
 
 环境变量在启动时覆盖 `config.json`；此后通过控制台保存设置，会以当前生效值写回文件。
 

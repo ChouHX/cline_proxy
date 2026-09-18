@@ -1,5 +1,8 @@
 # ---- 构建阶段：编译 React 控制台 ----
-FROM node:22-alpine AS build
+# 固定在 BUILDPLATFORM：前端产物与目标架构无关，
+# 这样构建 arm64 镜像时 npm install / vite build 依旧跑在原生 amd64 上，
+# 不必经受 QEMU 模拟（否则多架构构建会被拖到几十分钟）。
+FROM --platform=$BUILDPLATFORM node:22-alpine AS build
 WORKDIR /app
 COPY package.json ./
 RUN npm install --no-audit --no-fund
