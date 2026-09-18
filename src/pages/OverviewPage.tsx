@@ -3,9 +3,10 @@ import { IconAlertTriangle, IconCopy, IconExternalLink } from '@tabler/icons-rea
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { getAccounts, getHistory, getModels } from '../api/client';
+import { getAccounts, getHistory, getModels, getUsage } from '../api/client';
 import { useAuth } from '../auth/AuthProvider';
 import { ErrorBlock, LoadingBlock, PageHeader, Panel } from '../components/PageKit';
+import { UsagePanel } from '../components/UsageMeter';
 import { useRefresh } from '../data/RefreshContext';
 import { useAsyncData } from '../hooks/useAsyncData';
 
@@ -43,14 +44,20 @@ export default function OverviewPage() {
   const [copied, setCopied] = useState(false);
 
   const { data, loading, error } = useAsyncData(async () => {
-    const [models, accounts, history] = await Promise.all([getModels(), getAccounts(), getHistory()]);
-    return { models, accounts, history: history.history };
+    const [models, accounts, history, usage] = await Promise.all([
+      getModels(),
+      getAccounts(),
+      getHistory(),
+      getUsage(),
+    ]);
+    return { models, accounts, history: history.history, usage };
   }, [token]);
 
   const proxyBase = data?.models.proxyBase || meta?.proxyBase || '';
   const subs = data?.models.subscription || [];
   const probed = subs.filter((s) => s.meta?.pinnable).length;
   const enabledAccounts = (data?.accounts.accounts || []).filter((a) => a.enabled !== false && a.key).length;
+  const usageAccounts = data?.usage.accounts || [];
 
   const copy = async () => {
     if (!proxyBase) return;
@@ -137,6 +144,33 @@ export default function OverviewPage() {
             客户端 Base URL 填上面的地址（已含 <Code>/v1</Code>），API Key 填「访问与安全」里设置的代理密钥；
             本地未设密钥时留空即可。
           </Text>
+        </Panel>
+
+        <Panel>
+          <Group justify="space-between" align="center" mb="sm" wrap="wrap">
+            <Text fw={600} fz={13.5}>
+              账号额度
+            </Text>
+            <Text fz={11.5} c="dimmed">
+              每 {data?.usage.pollMinutes ?? '—'} 分钟自动采集 · 只读查询，不消耗额度
+            </Text>
+          </Group>
+          {usageAccounts.length === 0 ? (
+            <Text fz={12.5} c="dimmed">
+              尚未配置启用的账号，无法采集额度。
+            </Text>
+          ) : (
+            <Stack gap="xl">
+              {usageAccounts.map((name) => (
+                <UsagePanel
+                  key={name}
+                  account={name}
+                  usage={data?.usage.usage[name]}
+                  pollMinutes={data?.usage.pollMinutes}
+                />
+              ))}
+            </Stack>
+          )}
         </Panel>
 
         <Panel p={0}>

@@ -1,4 +1,5 @@
 import type {
+  AccountUsage,
   AccountsResponse,
   AuthSession,
   HistoryResponse,
@@ -8,6 +9,7 @@ import type {
   ProbeResponse,
   SecurityResponse,
   TestResponse,
+  UsageResponse,
   ValidateResponse,
 } from './types';
 
@@ -114,6 +116,14 @@ export const getModels = () => get<ModelsResponse>('/api/models');
 export const getAccounts = () => get<AccountsResponse>('/api/accounts');
 export const getSecurity = () => get<SecurityResponse>('/api/security');
 export const getHistory = () => get<HistoryResponse>('/api/history');
+
+// ---------- 账号额度 ----------
+export const getUsage = () => get<UsageResponse>('/api/usage');
+
+export const refreshUsage = () =>
+  post<{ ok: boolean; count?: number; error?: string; usage: Record<string, AccountUsage>; updatedAt: number }>(
+    '/api/usage/refresh',
+  );
 
 export const saveAccounts = (payload: {
   accounts: { name: string; key: string; enabled: boolean }[];

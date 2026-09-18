@@ -431,6 +431,70 @@ function record(modelId, info) {
   saveMeta();
 }
 
+// ---------- 账号额度（Cline Pass usage-limits） ----------
+// 认证方式与 chat 端点完全同源：Authorization: Bearer <sk_ key>，无需任何额外凭据。
+// 该端点只读、不消耗订阅额度，因此可以放心定时轮询。
+META.usage = META.usage || {};
+
+const USAGE_PATH = '/users/me/plan/usage-limits';
+const PLAN_PATH = '/users/me/plan';
+
+async function fetchAccountUsage(key) {
+  const [limitsRes, planRes] = await Promise.all([
+    fetchJSON(`${config.upstreamBase}${USAGE_PATH}`, { headers: chatHeaders(key) }, 30000),
+    fetchJSON(`${config.upstreamBase}${PLAN_PATH}`, { headers: chatHeaders(key) }, 30000),
+  ]);
+  if (limitsRes.status !== 200) {
+    const e = limitsRes.json?.error;
+    const msg = typeof e === 'string' ? e : e?.message;
+    return { ok: false, error: msg || `HTTP ${limitsRes.status}`, fetchedAt: Date.now() };
+  }
+  const limits = (limitsRes.json?.data?.limits || []).map((l) => ({
+    type: String(l.type || ''),
+    percentUsed: Number(l.percentUsed) || 0,
+    resetsAt: l.resetsAt || null,
+  }));
+  const planData = planRes.status === 200 ? planRes.json?.data || {} : {};
+  const p = planData.plan || {};
+  return {
+    ok: true,
+    error: null,
+    fetchedAt: Date.now(),
+    limits,
+    plan: {
+      displayName: p.displayName || p.name || null,
+      interval: p.interval || null,
+      currentPeriodEnd: planData.currentPeriodEnd || null,
+      canceledAt: planData.canceledAt || null,
+    },
+  };
+}
+
+// 为所有启用账号刷新额度；单个账号失败只影响它自己
+async function refreshAllUsage() {
+  const list = enabledAccounts();
+  if (!list.length) return { ok: false, error: 'no enabled accounts' };
+  await Promise.all(list.map(async (a) => {
+    try {
+      META.usage[a.name] = await fetchAccountUsage(a.key);
+    } catch (e) {
+      META.usage[a.name] = { ok: false, error: e.message || 'fetch failed', fetchedAt: Date.now() };
+    }
+  }));
+  META.usageUpdatedAt = Date.now();
+  saveMeta();
+  return { ok: true, count: list.length };
+}
+
+const USAGE_POLL_MINUTES = Math.max(1, Number(process.env.USAGE_POLL_MINUTES) || 5);
+let USAGE_TIMER = null;
+function startUsagePolling() {
+  if (USAGE_TIMER) clearInterval(USAGE_TIMER);
+  USAGE_TIMER = setInterval(() => { refreshAllUsage().catch(() => {}); }, USAGE_POLL_MINUTES * 60e3);
+  // unref：轮询不应阻止进程正常退出
+  USAGE_TIMER.unref?.();
+}
+
 // ---------- 聊天代理 ----------
 const CHAT_PATHS = new Set(['/chat/completions', '/v1/chat/completions', '/api/v1/chat/completions']);
 
@@ -931,6 +995,8 @@ const server = http.createServer(async (req, res) => {
       config.activeAccount = Math.min(Math.max(0, Number(body.active) || 0), accs.length - 1);
       saveConfig();
       RR_COUNTER = 0;
+      // 账号池变了，立刻为新装/启用的账号拉一次额度（不阻塞响应）
+      refreshAllUsage().catch(() => {});
       return sendJSON(res, 200, { ok: true, accounts: config.accounts.length, mode: config.accountMode, active: config.activeAccount });
     }
     if (req.method === 'POST' && p === '/api/accounts/test') {
@@ -978,6 +1044,18 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && p === '/api/fetch-official-models') {
       const r = await fetchOfficialModels();
       return sendJSON(res, 200, { ok: true, ...r });
+    }
+    if (req.method === 'GET' && p === '/api/usage') {
+      return sendJSON(res, 200, {
+        usage: META.usage || {},
+        pollMinutes: USAGE_POLL_MINUTES,
+        updatedAt: META.usageUpdatedAt || 0,
+        accounts: enabledAccounts().map((a) => a.name),
+      });
+    }
+    if (req.method === 'POST' && p === '/api/usage/refresh') {
+      const r = await refreshAllUsage();
+      return sendJSON(res, 200, { ...r, usage: META.usage || {}, updatedAt: META.usageUpdatedAt || 0 });
     }
     if (req.method === 'GET' && p === '/api/history') return sendJSON(res, 200, { history: META.history });
     if (req.method === 'GET' && p === '/api/config') return sendJSON(res, 200, { port: config.port, perModel: config.perModel, knownModels: config.knownModels });
@@ -1029,4 +1107,11 @@ const BIND_HOST = process.env.BIND_HOST || '127.0.0.1';
 server.listen(config.port, BIND_HOST, () => {
   console.log(`Cline Pass 上游控制台:  http://127.0.0.1:${config.port}/`);
   console.log(`OpenAI 兼容代理地址:   http://127.0.0.1:${config.port}/v1`);
+  startUsagePolling();
+  // 启动即拉一次，控制台打开就能看到额度，不必等第一个轮询周期
+  refreshAllUsage()
+    .then((r) => {
+      if (r.ok) console.log(`[额度] 已刷新 ${r.count} 个账号，此后每 ${USAGE_POLL_MINUTES} 分钟自动更新`);
+    })
+    .catch(() => { /* 网络异常时不阻塞启动 */ });
 });

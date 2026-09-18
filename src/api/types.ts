@@ -160,3 +160,32 @@ export interface AuthSession {
   authRequired: boolean;
   error?: { message: string };
 }
+
+// ---------- 账号额度（/api/usage） ----------
+export interface UsageLimit {
+  type: string;
+  percentUsed: number;
+  resetsAt: string | null;
+}
+
+export interface UsagePlan {
+  displayName: string | null;
+  interval: string | null;
+  currentPeriodEnd: string | null;
+  canceledAt: string | null;
+}
+
+export interface AccountUsage {
+  ok: boolean;
+  error: string | null;
+  fetchedAt: number;
+  limits?: UsageLimit[];
+  plan?: UsagePlan;
+}
+
+export interface UsageResponse {
+  usage: Record<string, AccountUsage>;
+  pollMinutes: number;
+  updatedAt: number;
+  accounts: string[];
+}
