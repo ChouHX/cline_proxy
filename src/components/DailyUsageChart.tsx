@@ -1,4 +1,4 @@
-import { Box, Group, Stack, Text, Tooltip } from '@mantine/core';
+import { Box, Tooltip } from '@mantine/core';
 import type { DailyUsageItem } from '../api/types';
 
 /** 成本字段的接口原始单位是 1e-8 USD */
@@ -60,97 +60,60 @@ export function aggregateByModel(items: DailyUsageItem[]): ModelAgg[] {
   return [...map.values()].sort((a, b) => b.total - a.total);
 }
 
-const PROMPT_COLOR = 'linear-gradient(90deg, #2f68d8 0%, #4f8cff 100%)';
-const COMPLETION_COLOR = 'linear-gradient(90deg, #1a8752 0%, #34c77b 100%)';
+export const BAR_PROMPT = 'linear-gradient(90deg, #2f68d8 0%, #4f8cff 100%)';
+export const BAR_COMPLETION = 'linear-gradient(90deg, #1a8752 0%, #34c77b 100%)';
 
-/** 每天一行：输入/输出堆叠条形 + 合计 + 成本 */
-export default function DailyUsageChart({ days }: { days: DayAgg[] }) {
-  if (!days.length) {
-    return (
-      <Text fz={12.5} c="dimmed">
-        该区间没有用量记录。
-      </Text>
-    );
-  }
-  const max = Math.max(...days.map((d) => d.prompt + d.completion), 1);
-
+/**
+ * 横向堆叠条：左段=输入 tokens，右段=输出 tokens，总长按区间最大值归一化。
+ * 放进表格单元格里，让「图」与「明细」处在同一行，不必上下对照。
+ */
+export default function StackedBar({
+  prompt,
+  completion,
+  cost,
+  max,
+  label,
+  height = 18,
+}: {
+  prompt: number;
+  completion: number;
+  cost: number;
+  max: number;
+  label: string;
+  height?: number;
+}) {
+  const pw = max > 0 ? (prompt / max) * 100 : 0;
+  const cw = max > 0 ? (completion / max) * 100 : 0;
   return (
-    <Stack gap={7}>
-      <Group gap="sm" wrap="nowrap">
-        <Text w={62} fz={11} c="dimmed" style={{ flex: 'none' }}>
-          日期
-        </Text>
-        <Box flex={1} />
-        <Text w={72} fz={11} c="dimmed" ta="right" style={{ flex: 'none' }}>
-          合计
-        </Text>
-        <Text w={82} fz={11} c="dimmed" ta="right" style={{ flex: 'none' }}>
-          成本估算
-        </Text>
-      </Group>
-
-      {days.map((d) => {
-        const pw = (d.prompt / max) * 100;
-        const cw = (d.completion / max) * 100;
-        return (
-          <Group key={d.date} gap="sm" wrap="nowrap">
-            <Text w={62} fz={11.5} c="dimmed" style={{ flex: 'none' }}>
-              {d.date.slice(5)}
-            </Text>
-            <Box flex={1} style={{ minWidth: 0 }}>
-              <Tooltip
-                withArrow
-                multiline
-                maw={340}
-                label={
-                  <>
-                    <div>{d.date}</div>
-                    <div>输入 {fmtInt(d.prompt)} tokens</div>
-                    <div>输出 {fmtInt(d.completion)} tokens</div>
-                    <div>合计 {fmtInt(d.total)} tokens</div>
-                    <div>成本 {fmtCost(d.cost)}</div>
-                  </>
-                }
-              >
-                <Box
-                  h={16}
-                  style={{
-                    display: 'flex',
-                    gap: 1,
-                    borderRadius: 3,
-                    overflow: 'hidden',
-                    background: 'rgba(255,255,255,.035)',
-                  }}
-                >
-                  <Box style={{ width: `${pw}%`, background: PROMPT_COLOR, transition: 'width .3s ease' }} />
-                  <Box style={{ width: `${cw}%`, background: COMPLETION_COLOR, transition: 'width .3s ease' }} />
-                </Box>
-              </Tooltip>
-            </Box>
-            <Text w={72} fz={11.5} ta="right" style={{ flex: 'none' }}>
-              {fmtTokens(d.total)}
-            </Text>
-            <Text w={82} fz={11.5} ta="right" c="dimmed" style={{ flex: 'none' }}>
-              {fmtCost(d.cost)}
-            </Text>
-          </Group>
-        );
-      })}
-
-      <Group gap="md" mt={2} wrap="wrap">
-        <Group gap={6}>
-          <Box w={11} h={11} style={{ borderRadius: 3, background: PROMPT_COLOR }} />
-          <Text fz={11} c="dimmed">
-            输入 tokens
-          </Text>
-        </Group>
-        <Group gap={6}>
-          <Box w={11} h={11} style={{ borderRadius: 3, background: COMPLETION_COLOR }} />
-          <Text fz={11} c="dimmed">
-            输出 tokens
-          </Text>
-        </Group>
-      </Group>
-    </Stack>
+    <Tooltip
+      withArrow
+      multiline
+      maw={320}
+      label={
+        <>
+          <div>{label}</div>
+          <div>输入 {fmtInt(prompt)} tokens</div>
+          <div>输出 {fmtInt(completion)} tokens</div>
+          <div>合计 {fmtInt(prompt + completion)} tokens</div>
+          <div>成本 {fmtCost(cost)}</div>
+        </>
+      }
+    >
+      <Box
+        h={height}
+        w="100%"
+        style={{
+          display: 'flex',
+          gap: 1,
+          minWidth: 90,
+          borderRadius: 3,
+          overflow: 'hidden',
+          background: 'rgba(255,255,255,.035)',
+        }}
+      >
+        <Box style={{ width: `${pw}%`, background: BAR_PROMPT, transition: 'width .3s ease' }} />
+        <Box style={{ width: `${cw}%`, background: BAR_COMPLETION, transition: 'width .3s ease' }} />
+      </Box>
+    </Tooltip>
   );
 }

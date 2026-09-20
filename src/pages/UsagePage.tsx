@@ -4,14 +4,16 @@ import { IconRefresh } from '@tabler/icons-react';
 import { useMemo, useState } from 'react';
 
 import { getDailyUsage, refreshDailyUsage } from '../api/client';
-import { ErrorBlock, LoadingBlock, PageHeader, Panel } from '../components/PageKit';
-import DailyUsageChart, {
+import StackedBar, {
+  BAR_COMPLETION,
+  BAR_PROMPT,
   aggregateByDay,
   aggregateByModel,
   fmtCost,
   fmtInt,
   fmtTokens,
 } from '../components/DailyUsageChart';
+import { ErrorBlock, LoadingBlock, PageHeader, Panel } from '../components/PageKit';
 import { useRefresh } from '../data/RefreshContext';
 import { useAsyncData } from '../hooks/useAsyncData';
 
@@ -50,6 +52,27 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
   );
 }
 
+function Legend() {
+  return (
+    <Group gap="sm" wrap="nowrap">
+      <Group gap={5}>
+        <Box w={10} h={10} style={{ borderRadius: 2, background: BAR_PROMPT }} />
+        <Text fz={11} c="dimmed">
+          输入
+        </Text>
+      </Group>
+      <Group gap={5}>
+        <Box w={10} h={10} style={{ borderRadius: 2, background: BAR_COMPLETION }} />
+        <Text fz={11} c="dimmed">
+          输出
+        </Text>
+      </Group>
+    </Group>
+  );
+}
+
+const RIGHT = { textAlign: 'right' as const };
+
 export default function UsagePage() {
   const { token } = useRefresh();
   const [preset, setPreset] = useState<Preset>('thisMonth');
@@ -74,6 +97,7 @@ export default function UsagePage() {
 
   const days = useMemo(() => aggregateByDay(items), [items]);
   const models = useMemo(() => aggregateByModel(items), [items]);
+  const maxTotal = useMemo(() => Math.max(...days.map((d) => d.total), 1), [days]);
 
   const totals = useMemo(
     () =>
@@ -108,7 +132,13 @@ export default function UsagePage() {
         title="用量统计"
         description="按天统计账号的 token 消耗与成本。数据来源为 Cline 用量接口，服务端缓存 30 分钟。"
         actions={
-          <Button variant="default" size="xs" loading={busy} leftSection={<IconRefresh size={14} />} onClick={manualRefresh}>
+          <Button
+            variant="default"
+            size="xs"
+            loading={busy}
+            leftSection={<IconRefresh size={14} />}
+            onClick={manualRefresh}
+          >
             刷新统计
           </Button>
         }
@@ -175,37 +205,43 @@ export default function UsagePage() {
             </Panel>
           ) : null}
 
-          <Panel mb="md">
-            <Group justify="space-between" mb="sm" wrap="wrap">
+          {/* 图形与明细合并：每行左侧是横向柱条，右侧是对应数值 */}
+          <Panel mb="md" p={0}>
+            <Group justify="space-between" align="center" p="md" pb="sm" wrap="wrap" gap="sm">
               <Text fw={600} fz={13.5}>
                 每日用量
               </Text>
-              <Text fz={11} c="dimmed">
-                成本由接口原始值按 1e-8 换算，仅供参考
-              </Text>
+              <Group gap="lg" wrap="wrap">
+                <Legend />
+                <Text fz={11} c="dimmed">
+                  成本由接口原始值按 1e-8 换算，仅供参考
+                </Text>
+              </Group>
             </Group>
-            <DailyUsageChart days={days} />
-          </Panel>
-
-          <Panel mb="md" p={0}>
-            <Text fw={600} fz={13.5} p="md" pb="sm">
-              按天明细
-            </Text>
             <ScrollArea>
-              <Table miw={720} fz={12.5}>
+              <Table miw={940} fz={12.5} verticalSpacing="xs">
                 <Table.Thead>
                   <Table.Tr>
-                    <Table.Th w={110}>日期</Table.Th>
-                    <Table.Th>输入 tokens</Table.Th>
-                    <Table.Th>输出 tokens</Table.Th>
-                    <Table.Th>合计</Table.Th>
-                    <Table.Th w={110}>成本估算</Table.Th>
+                    <Table.Th w={104}>日期</Table.Th>
+                    <Table.Th miw={260}>用量分布</Table.Th>
+                    <Table.Th w={120} style={RIGHT}>
+                      输入 tokens
+                    </Table.Th>
+                    <Table.Th w={110} style={RIGHT}>
+                      输出 tokens
+                    </Table.Th>
+                    <Table.Th w={96} style={RIGHT}>
+                      合计
+                    </Table.Th>
+                    <Table.Th w={108} style={RIGHT}>
+                      成本估算
+                    </Table.Th>
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
                   {days.length === 0 ? (
                     <Table.Tr>
-                      <Table.Td colSpan={5}>
+                      <Table.Td colSpan={6}>
                         <Text fz={12.5} c="dimmed" py="sm">
                           该区间没有记录。
                         </Text>
@@ -219,12 +255,23 @@ export default function UsagePage() {
                             {d.date}
                           </Text>
                         </Table.Td>
-                        <Table.Td>{fmtInt(d.prompt)}</Table.Td>
-                        <Table.Td>{fmtInt(d.completion)}</Table.Td>
                         <Table.Td>
-                          <Text fw={600}>{fmtTokens(d.total)}</Text>
+                          <StackedBar
+                            prompt={d.prompt}
+                            completion={d.completion}
+                            cost={d.cost}
+                            max={maxTotal}
+                            label={d.date}
+                          />
                         </Table.Td>
-                        <Table.Td>{fmtCost(d.cost)}</Table.Td>
+                        <Table.Td style={RIGHT}>{fmtInt(d.prompt)}</Table.Td>
+                        <Table.Td style={RIGHT}>{fmtInt(d.completion)}</Table.Td>
+                        <Table.Td style={RIGHT}>
+                          <Text fw={600} fz={12.5}>
+                            {fmtTokens(d.total)}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td style={RIGHT}>{fmtCost(d.cost)}</Table.Td>
                       </Table.Tr>
                     ))
                   )}
@@ -238,21 +285,31 @@ export default function UsagePage() {
                         </Text>
                       </Table.Td>
                       <Table.Td>
+                        <StackedBar
+                          prompt={totals.prompt}
+                          completion={totals.completion}
+                          cost={totals.cost}
+                          max={maxTotal}
+                          label="区间合计"
+                          height={14}
+                        />
+                      </Table.Td>
+                      <Table.Td style={RIGHT}>
                         <Text fw={600} fz={12}>
                           {fmtInt(totals.prompt)}
                         </Text>
                       </Table.Td>
-                      <Table.Td>
+                      <Table.Td style={RIGHT}>
                         <Text fw={600} fz={12}>
                           {fmtInt(totals.completion)}
                         </Text>
                       </Table.Td>
-                      <Table.Td>
+                      <Table.Td style={RIGHT}>
                         <Text fw={600} fz={12}>
                           {fmtTokens(totals.total)}
                         </Text>
                       </Table.Td>
-                      <Table.Td>
+                      <Table.Td style={RIGHT}>
                         <Text fw={600} fz={12}>
                           {fmtCost(totals.cost)}
                         </Text>
@@ -265,25 +322,41 @@ export default function UsagePage() {
           </Panel>
 
           <Panel p={0}>
-            <Text fw={600} fz={13.5} p="md" pb="sm">
-              按模型汇总
-            </Text>
+            <Group justify="space-between" align="center" p="md" pb="sm" wrap="wrap" gap="sm">
+              <Text fw={600} fz={13.5}>
+                按模型汇总
+              </Text>
+              <Text fz={11} c="dimmed">
+                柱条按区间内最大用量归一化
+              </Text>
+            </Group>
             <ScrollArea>
-              <Table miw={820} fz={12.5}>
+              <Table miw={940} fz={12.5} verticalSpacing="xs">
                 <Table.Thead>
                   <Table.Tr>
-                    <Table.Th>模型</Table.Th>
-                    <Table.Th>输入 tokens</Table.Th>
-                    <Table.Th>输出 tokens</Table.Th>
-                    <Table.Th>合计</Table.Th>
-                    <Table.Th w={96}>占比</Table.Th>
-                    <Table.Th w={110}>成本估算</Table.Th>
+                    <Table.Th w={300}>模型</Table.Th>
+                    <Table.Th miw={240}>用量分布</Table.Th>
+                    <Table.Th w={120} style={RIGHT}>
+                      输入 tokens
+                    </Table.Th>
+                    <Table.Th w={110} style={RIGHT}>
+                      输出 tokens
+                    </Table.Th>
+                    <Table.Th w={96} style={RIGHT}>
+                      合计
+                    </Table.Th>
+                    <Table.Th w={84} style={RIGHT}>
+                      占比
+                    </Table.Th>
+                    <Table.Th w={108} style={RIGHT}>
+                      成本估算
+                    </Table.Th>
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
                   {models.length === 0 ? (
                     <Table.Tr>
-                      <Table.Td colSpan={6}>
+                      <Table.Td colSpan={7}>
                         <Text fz={12.5} c="dimmed" py="sm">
                           该区间没有记录。
                         </Text>
@@ -297,17 +370,28 @@ export default function UsagePage() {
                             {m.model}
                           </Text>
                         </Table.Td>
-                        <Table.Td>{fmtInt(m.prompt)}</Table.Td>
-                        <Table.Td>{fmtInt(m.completion)}</Table.Td>
                         <Table.Td>
-                          <Text fw={600}>{fmtTokens(m.total)}</Text>
+                          <StackedBar
+                            prompt={m.prompt}
+                            completion={m.completion}
+                            cost={m.cost}
+                            max={models[0]?.total || 1}
+                            label={m.model}
+                          />
                         </Table.Td>
-                        <Table.Td>
+                        <Table.Td style={RIGHT}>{fmtInt(m.prompt)}</Table.Td>
+                        <Table.Td style={RIGHT}>{fmtInt(m.completion)}</Table.Td>
+                        <Table.Td style={RIGHT}>
+                          <Text fw={600} fz={12.5}>
+                            {fmtTokens(m.total)}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td style={RIGHT}>
                           <Text fz={11.5} c="dimmed">
                             {totals.total ? ((m.total / totals.total) * 100).toFixed(1) : '0.0'}%
                           </Text>
                         </Table.Td>
-                        <Table.Td>{fmtCost(m.cost)}</Table.Td>
+                        <Table.Td style={RIGHT}>{fmtCost(m.cost)}</Table.Td>
                       </Table.Tr>
                     ))
                   )}
