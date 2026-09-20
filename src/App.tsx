@@ -11,6 +11,7 @@ import NotFoundPage from './pages/NotFoundPage';
 import OverviewPage from './pages/OverviewPage';
 import PlaygroundPage from './pages/PlaygroundPage';
 import SecurityPage from './pages/SecurityPage';
+import UsagePage from './pages/UsagePage';
 
 /**
  * 路由表。守卫挂在 <RequireAuth> 这一层：
@@ -31,6 +32,7 @@ export default function App() {
           <Route path="history" element={<HistoryPage />} />
           <Route path="catalog" element={<CatalogPage />} />
           <Route path="security" element={<SecurityPage />} />
+          <Route path="usage" element={<UsagePage />} />
         </Route>
       </Route>
 

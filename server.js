@@ -438,9 +438,11 @@ META.usage = META.usage || {};
 
 const USAGE_PATH = '/users/me/plan/usage-limits';
 const PLAN_PATH = '/users/me/plan';
+const ME_PATH = '/users/me';
 
 async function fetchAccountUsage(key) {
-  const [limitsRes, planRes] = await Promise.all([
+  const [meRes, limitsRes, planRes] = await Promise.all([
+    fetchJSON(`${config.upstreamBase}${ME_PATH}`, { headers: chatHeaders(key) }, 30000),
     fetchJSON(`${config.upstreamBase}${USAGE_PATH}`, { headers: chatHeaders(key) }, 30000),
     fetchJSON(`${config.upstreamBase}${PLAN_PATH}`, { headers: chatHeaders(key) }, 30000),
   ]);
@@ -460,6 +462,8 @@ async function fetchAccountUsage(key) {
     ok: true,
     error: null,
     fetchedAt: Date.now(),
+    // 用量统计接口按 userId 寻址，这里顺带取回并缓存，供 /usages/daily 使用
+    userId: meRes.status === 200 ? meRes.json?.data?.id || null : null,
     limits,
     plan: {
       displayName: p.displayName || p.name || null,
@@ -484,6 +488,63 @@ async function refreshAllUsage() {
   META.usageUpdatedAt = Date.now();
   saveMeta();
   return { ok: true, count: list.length };
+}
+
+// ---------- 用量统计（按天） ----------
+// 认证同样复用账号 key；该端点按 userId 寻址，userId 由 /users/me 取回后缓存。
+// 接口返回：tokens 为原始计数；costUsd 单位为微美元（1e-6 USD），展示时需 /1e6。
+// 统计数据变化慢，单独用较长 TTL，不跟着额度那 5 分钟轮询跑。
+META.usageDaily = META.usageDaily || {};
+const USAGE_DAILY_TTL = 30 * 60e3;
+
+const dayStr = (d) => d.toISOString().slice(0, 10);
+function monthRange() {
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0));
+  return { start: dayStr(start), end: dayStr(end) };
+}
+
+async function refreshDailyUsage(range) {
+  const { start, end } = range || monthRange();
+  const list = enabledAccounts();
+  if (!list.length) return { ok: false, error: 'no enabled accounts' };
+  await Promise.all(list.map(async (a) => {
+    const userId = META.usage[a.name]?.userId;
+    if (!userId) {
+      META.usageDaily[a.name] = { ok: false, error: '缺少 userId（先刷新一次额度）', fetchedAt: Date.now(), items: [] };
+      return;
+    }
+    try {
+      const res = await fetchJSON(
+        `${config.upstreamBase}/users/${encodeURIComponent(userId)}/usages/daily?startDate=${start}&endDate=${end}`,
+        { headers: chatHeaders(a.key) },
+        45000,
+      );
+      if (res.status !== 200) {
+        const e = res.json?.error;
+        const msg = typeof e === 'string' ? e : e?.message;
+        META.usageDaily[a.name] = { ok: false, error: msg || `HTTP ${res.status}`, fetchedAt: Date.now(), items: [] };
+        return;
+      }
+      const items = (res.json?.data?.items || []).map((it) => ({
+        date: String(it.date || ''),
+        model: String(it.aiModelName || ''),
+        typeName: String(it.aiModelTypeName || ''),
+        operation: String(it.operation || ''),
+        costUsd: Number(it.costUsd) || 0,
+        promptTokens: Number(it.promptTokens) || 0,
+        completionTokens: Number(it.completionTokens) || 0,
+      }));
+      META.usageDaily[a.name] = { ok: true, error: null, fetchedAt: Date.now(), start, end, items };
+    } catch (e) {
+      META.usageDaily[a.name] = { ok: false, error: e.message || 'fetch failed', fetchedAt: Date.now(), items: [] };
+    }
+  }));
+  META.usageDailyRange = { start, end };
+  META.usageDailyFetchedAt = Date.now();
+  saveMeta();
+  return { ok: true, range: { start, end } };
 }
 
 const USAGE_POLL_MINUTES = Math.max(1, Number(process.env.USAGE_POLL_MINUTES) || 5);
@@ -1056,6 +1117,36 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && p === '/api/usage/refresh') {
       const r = await refreshAllUsage();
       return sendJSON(res, 200, { ...r, usage: META.usage || {}, updatedAt: META.usageUpdatedAt || 0 });
+    }
+    if (req.method === 'GET' && p === '/api/usage/daily') {
+      const wantStart = url.searchParams.get('start');
+      const wantEnd = url.searchParams.get('end');
+      const range = wantStart && wantEnd ? { start: wantStart, end: wantEnd } : monthRange();
+      const cached = !!(META.usageDailyFetchedAt
+        && META.usageDailyRange
+        && META.usageDailyRange.start === range.start
+        && META.usageDailyRange.end === range.end
+        && Date.now() - META.usageDailyFetchedAt < USAGE_DAILY_TTL);
+      if (!cached) await refreshDailyUsage(range);
+      return sendJSON(res, 200, {
+        accounts: enabledAccounts().map((a) => a.name),
+        range,
+        daily: META.usageDaily || {},
+        updatedAt: META.usageDailyFetchedAt || 0,
+        ttlMinutes: Math.round(USAGE_DAILY_TTL / 60e3),
+      });
+    }
+    if (req.method === 'POST' && p === '/api/usage/daily/refresh') {
+      const raw = await readBody(req).then((b) => b.toString());
+      let body = {};
+      try { body = raw ? JSON.parse(raw) : {}; } catch { /* 参数非法时退回默认区间 */ }
+      const range = body.start && body.end ? { start: String(body.start), end: String(body.end) } : monthRange();
+      await refreshDailyUsage(range);
+      return sendJSON(res, 200, {
+        ok: true, range,
+        daily: META.usageDaily || {},
+        updatedAt: META.usageDailyFetchedAt || 0,
+      });
     }
     if (req.method === 'GET' && p === '/api/history') return sendJSON(res, 200, { history: META.history });
     if (req.method === 'GET' && p === '/api/config') return sendJSON(res, 200, { port: config.port, perModel: config.perModel, knownModels: config.knownModels });

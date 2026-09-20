@@ -18,6 +18,7 @@ import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import {
   IconBooks,
+  IconChartBar,
   IconCheck,
   IconCopy,
   IconFlask,
@@ -41,6 +42,7 @@ const NAV = [
   { to: '/dashboard/models', label: '订阅模型', desc: '上游优先级 / 钉住 / 校验', icon: IconStack2 },
   { to: '/dashboard/accounts', label: '账号池', desc: '多账号与轮询', icon: IconUsers },
   { to: '/dashboard/playground', label: '测试台', desc: '发真实请求验证', icon: IconFlask },
+  { to: '/dashboard/usage', label: '用量统计', desc: '按天 token 与成本', icon: IconChartBar },
   { to: '/dashboard/history', label: '请求历史', desc: '最近 100 条记录', icon: IconHistory },
   { to: '/dashboard/catalog', label: '模型目录', desc: 'Cline 公开目录', icon: IconBooks },
   { to: '/dashboard/security', label: '访问与安全', desc: '代理密钥与暴露面', icon: IconShieldLock },

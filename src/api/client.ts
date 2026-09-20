@@ -1,7 +1,9 @@
 import type {
+  AccountDailyUsage,
   AccountUsage,
   AccountsResponse,
   AuthSession,
+  DailyUsageResponse,
   HistoryResponse,
   MetaInfo,
   ModelConfig,
@@ -123,6 +125,16 @@ export const getUsage = () => get<UsageResponse>('/api/usage');
 export const refreshUsage = () =>
   post<{ ok: boolean; count?: number; error?: string; usage: Record<string, AccountUsage>; updatedAt: number }>(
     '/api/usage/refresh',
+  );
+
+// ---------- 用量统计（按天） ----------
+export const getDailyUsage = (start?: string, end?: string) =>
+  get<DailyUsageResponse>(start && end ? `/api/usage/daily?start=${start}&end=${end}` : '/api/usage/daily');
+
+export const refreshDailyUsage = (start: string, end: string) =>
+  post<{ ok: boolean; range: { start: string; end: string }; daily: Record<string, AccountDailyUsage>; updatedAt: number }>(
+    '/api/usage/daily/refresh',
+    { start, end },
   );
 
 export const saveAccounts = (payload: {

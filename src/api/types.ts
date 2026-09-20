@@ -189,3 +189,32 @@ export interface UsageResponse {
   updatedAt: number;
   accounts: string[];
 }
+
+// ---------- 用量统计（/api/usage/daily） ----------
+export interface DailyUsageItem {
+  date: string;
+  model: string;
+  typeName: string;
+  operation: string;
+  /** 接口原始值，单位 1e-8 USD（展示时换算） */
+  costUsd: number;
+  promptTokens: number;
+  completionTokens: number;
+}
+
+export interface AccountDailyUsage {
+  ok: boolean;
+  error: string | null;
+  fetchedAt: number;
+  start?: string;
+  end?: string;
+  items: DailyUsageItem[];
+}
+
+export interface DailyUsageResponse {
+  accounts: string[];
+  range: { start: string; end: string };
+  daily: Record<string, AccountDailyUsage>;
+  updatedAt: number;
+  ttlMinutes: number;
+}
