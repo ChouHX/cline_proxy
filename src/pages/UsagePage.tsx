@@ -12,6 +12,7 @@ import StackedBar, {
   fmtCost,
   fmtInt,
   fmtTokens,
+  type DayAgg,
 } from '../components/DailyUsageChart';
 import UsageBarChart, { type BarDatum } from '../components/UsageBarChart';
 import { ErrorBlock, LoadingBlock, PageHeader, Panel } from '../components/PageKit';
@@ -42,6 +43,21 @@ function niceMax(v: number): number {
   const n = v / base;
   const step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10;
   return step * base;
+}
+
+/** 把区间内没有记录的日子补成 0，让 X 轴覆盖整段范围（如整月 30 天） */
+function fillDays(days: DayAgg[], start: string, end: string): DayAgg[] {
+  const map = new Map(days.map((d) => [d.date, d]));
+  const cur = new Date(`${start}T00:00:00Z`);
+  const last = new Date(`${end}T00:00:00Z`);
+  if (Number.isNaN(cur.getTime()) || Number.isNaN(last.getTime())) return days;
+  const out: DayAgg[] = [];
+  while (cur <= last) {
+    const key = cur.toISOString().slice(0, 10);
+    out.push(map.get(key) || { date: key, prompt: 0, completion: 0, total: 0, cost: 0 });
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
 }
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
@@ -105,8 +121,13 @@ export default function UsagePage() {
   const dailyData = data?.daily?.[current];
   const items = dailyData?.items || [];
 
-  const days = useMemo(() => aggregateByDay(items), [items]);
+  // 补零到整段区间：柱状图覆盖区间每一天，无记录的日期显示为空柱
+  const days = useMemo(
+    () => fillDays(aggregateByDay(items), range.start, range.end),
+    [items, range.start, range.end],
+  );
   const models = useMemo(() => aggregateByModel(items), [items]);
+  const activeDays = useMemo(() => days.filter((d) => d.total > 0).length, [days]);
 
   const totals = useMemo(
     () =>
@@ -122,7 +143,7 @@ export default function UsagePage() {
     [days],
   );
 
-  // 柱状图按时间正序排列（X 轴为时间）
+  // 柱状图按时间正序（X 轴为时间）
   const chartData: BarDatum[] = useMemo(
     () =>
       days.map((d) => ({
@@ -218,7 +239,11 @@ export default function UsagePage() {
             <Stat label="合计 Tokens" value={fmtTokens(totals.total)} hint={`${fmtInt(totals.total)} tokens`} />
             <Stat label="输入 Tokens" value={fmtTokens(totals.prompt)} hint={`${fmtInt(totals.prompt)} tokens`} />
             <Stat label="输出 Tokens" value={fmtTokens(totals.completion)} hint={`${fmtInt(totals.completion)} tokens`} />
-            <Stat label="成本估算" value={fmtCost(totals.cost)} hint={`${days.length} 天有记录`} />
+            <Stat
+              label="成本估算"
+              value={fmtCost(totals.cost)}
+              hint={`${activeDays} / ${days.length} 天有记录`}
+            />
           </SimpleGrid>
 
           {dailyData && !dailyData.ok ? (
@@ -229,7 +254,6 @@ export default function UsagePage() {
             </Panel>
           ) : null}
 
-          {/* 图表与明细同卡：上方竖向柱状图（X=日期，Y=tokens），下方对应明细表 */}
           <Panel mb="md" p={0}>
             <Group justify="space-between" align="center" p="md" pb="sm" wrap="wrap" gap="sm">
               <Text fw={600} fz={13.5}>
@@ -238,105 +262,18 @@ export default function UsagePage() {
               <Group gap="lg" wrap="wrap">
                 <Legend />
                 <Text fz={11} c="dimmed">
-                  成本由接口原始值按 1e-8 换算，仅供参考
+                  X 轴为日期、Y 轴为 tokens；成本由接口原始值按 1e-8 换算，仅供参考
                 </Text>
               </Group>
             </Group>
-
             <Box px="md" pb="md" pt="xs">
-              {days.length === 0 ? (
+              {items.length === 0 ? (
                 <Text fz={12.5} c="dimmed" py="lg" ta="center">
                   该区间没有用量记录。
                 </Text>
               ) : (
-                <UsageBarChart
-                  data={chartData}
-                  max={yMax}
-                  fmtValue={fmtTokens}
-                  fmtTooltipValue={fmtInt}
-                />
+                <UsageBarChart data={chartData} max={yMax} fmtValue={fmtTokens} fmtTooltipValue={fmtInt} />
               )}
-            </Box>
-
-            <Box style={{ borderTop: '1px solid var(--mantine-color-ink-5)' }}>
-              <Text fw={600} fz={12.5} c="dimmed" px="md" pt="sm" pb="xs">
-                按天明细
-              </Text>
-              <ScrollArea>
-                <Table miw={760} fz={12.5} verticalSpacing="xs">
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th w={120}>日期</Table.Th>
-                      <Table.Th style={RIGHT}>输入 tokens</Table.Th>
-                      <Table.Th style={RIGHT}>输出 tokens</Table.Th>
-                      <Table.Th style={RIGHT}>合计</Table.Th>
-                      <Table.Th w={116} style={RIGHT}>
-                        成本估算
-                      </Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {days.length === 0 ? (
-                      <Table.Tr>
-                        <Table.Td colSpan={5}>
-                          <Text fz={12.5} c="dimmed" py="sm">
-                            该区间没有记录。
-                          </Text>
-                        </Table.Td>
-                      </Table.Tr>
-                    ) : (
-                      [...days].reverse().map((d) => (
-                        <Table.Tr key={d.date}>
-                          <Table.Td>
-                            <Text className="mono" fz={11.5}>
-                              {d.date}
-                            </Text>
-                          </Table.Td>
-                          <Table.Td style={RIGHT}>{fmtInt(d.prompt)}</Table.Td>
-                          <Table.Td style={RIGHT}>{fmtInt(d.completion)}</Table.Td>
-                          <Table.Td style={RIGHT}>
-                            <Text fw={600} fz={12.5}>
-                              {fmtTokens(d.total)}
-                            </Text>
-                          </Table.Td>
-                          <Table.Td style={RIGHT}>{fmtCost(d.cost)}</Table.Td>
-                        </Table.Tr>
-                      ))
-                    )}
-                  </Table.Tbody>
-                  {days.length ? (
-                    <Table.Tfoot>
-                      <Table.Tr>
-                        <Table.Td>
-                          <Text fw={600} fz={12}>
-                            合计
-                          </Text>
-                        </Table.Td>
-                        <Table.Td style={RIGHT}>
-                          <Text fw={600} fz={12}>
-                            {fmtInt(totals.prompt)}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td style={RIGHT}>
-                          <Text fw={600} fz={12}>
-                            {fmtInt(totals.completion)}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td style={RIGHT}>
-                          <Text fw={600} fz={12}>
-                            {fmtTokens(totals.total)}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td style={RIGHT}>
-                          <Text fw={600} fz={12}>
-                            {fmtCost(totals.cost)}
-                          </Text>
-                        </Table.Td>
-                      </Table.Tr>
-                    </Table.Tfoot>
-                  ) : null}
-                </Table>
-              </ScrollArea>
             </Box>
           </Panel>
 
