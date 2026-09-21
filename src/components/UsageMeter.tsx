@@ -78,7 +78,7 @@ export function UsageBadges({ usage }: { usage?: AccountUsage | null }) {
   );
 }
 
-/** 卡片内的详细形态：大片进度条 + 重置倒计时 + 套餐信息 */
+/** 卡片内的紧凑形态：每个窗口一行（标签 + 细进度条 + 百分比 + 重置倒计时） */
 export function UsagePanel({
   usage,
   account,
@@ -90,32 +90,32 @@ export function UsagePanel({
 }) {
   if (!usage) {
     return (
-      <Text fz={12} c="dimmed">
+      <Text fz={11.5} c="dimmed" lh={1.6}>
         额度数据尚未采集完成，稍候会自动出现{pollMinutes ? `（每 ${pollMinutes} 分钟刷新一次）` : ''}。
       </Text>
     );
   }
   if (!usage.ok) {
     return (
-      <Stack gap={6}>
+      <Group gap={8} wrap="nowrap" align="center">
         <FailedBadge error={usage.error} />
-        <Text fz={11} c="dimmed">
-          上一次尝试：{fmtTime(usage.fetchedAt)}
+        <Text fz={10.5} c="dimmed" truncate>
+          {fmtTime(usage.fetchedAt)} 尝试
         </Text>
-      </Stack>
+      </Group>
     );
   }
 
   const limits = usage.limits || [];
   return (
-    <Stack gap="md">
-      <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xs">
+    <Stack gap={7}>
+      <Group justify="space-between" align="flex-start" wrap="nowrap" gap={8}>
         <Box style={{ minWidth: 0 }}>
-          <Text fw={600} fz={14} truncate>
+          <Text fw={600} fz={12.5} lh={1.35} truncate>
             {account || '账号'}
           </Text>
           {usage.plan?.displayName ? (
-            <Text fz={11.5} c="dimmed" truncate>
+            <Text fz={10.5} c="dimmed" lh={1.35} truncate>
               {usage.plan.displayName}
             </Text>
           ) : null}
@@ -125,7 +125,7 @@ export function UsagePanel({
             label={`已于 ${new Date(usage.plan.canceledAt).toLocaleDateString()} 取消，到期后不再续费`}
             withArrow
           >
-            <Badge variant="light" color="warn" size="sm" radius="sm" style={{ flex: 'none' }}>
+            <Badge variant="light" color="warn" size="xs" radius="sm" style={{ flex: 'none' }}>
               已取消续费
             </Badge>
           </Tooltip>
@@ -133,36 +133,38 @@ export function UsagePanel({
       </Group>
 
       {limits.length === 0 ? (
-        <Text fz={12} c="dimmed">
+        <Text fz={11.5} c="dimmed">
           该账号未返回额度窗口。
         </Text>
       ) : (
-        <Stack gap="sm">
+        <Stack gap={5}>
           {limits.map((l) => {
             const color = usageColor(l.percentUsed);
             return (
-              <Box key={l.type}>
-                <Group justify="space-between" mb={4} gap="sm" wrap="nowrap">
-                  <Text fz={12.5} fw={500}>
-                    {windowLabel(l.type)}
-                  </Text>
-                  <Group gap="sm" wrap="nowrap">
-                    <Text fz={12.5} fw={600} c={`${color}.4`}>
-                      已用 {l.percentUsed}%
-                    </Text>
-                    <Text fz={11} c="dimmed">
-                      {untilText(l.resetsAt)}
-                    </Text>
-                  </Group>
-                </Group>
-                <Progress value={Math.min(100, Math.max(0, l.percentUsed))} color={color} size="md" radius="xl" />
-              </Box>
+              <Group key={l.type} gap={8} wrap="nowrap" align="center">
+                <Text fz={11.5} c="dimmed" w={42} style={{ flex: 'none' }}>
+                  {windowLabel(l.type)}
+                </Text>
+                <Progress
+                  value={Math.min(100, Math.max(0, l.percentUsed))}
+                  color={color}
+                  size={6}
+                  radius="xl"
+                  style={{ flex: 1, minWidth: 48 }}
+                />
+                <Text fz={11} fw={600} c={`${color}.4`} w={34} ta="right" style={{ flex: 'none' }}>
+                  {l.percentUsed}%
+                </Text>
+                <Text fz={10} c="dimmed" w={66} ta="right" truncate style={{ flex: 'none' }}>
+                  {untilText(l.resetsAt) || '—'}
+                </Text>
+              </Group>
             );
           })}
         </Stack>
       )}
 
-      <Text fz={10.5} c="dimmed">
+      <Text fz={10} c="dimmed">
         更新于 {fmtTime(usage.fetchedAt)}
         {pollMinutes ? ` · 每 ${pollMinutes} 分钟刷新` : ''}
       </Text>
