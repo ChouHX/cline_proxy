@@ -66,6 +66,8 @@ export interface OfficialFetchInfo {
 
 export interface ModelsResponse {
   subscription: SubscriptionItem[];
+  /** 已禁用转发的模型 ID：请求命中时服务端直接返回 500 */
+  disabledModels: string[];
   catalogCount: number;
   catalog: string[];
   proxyBase: string;
@@ -125,6 +127,8 @@ export interface HistoryResponse {
 
 export interface TestResponse {
   ok: boolean;
+  /** 模型已被禁用时为 true，此时不含任何上游调用 */
+  disabled?: boolean;
   ms?: number;
   error?: string;
   targets?: string[];
@@ -142,6 +146,8 @@ export interface TestResponse {
 
 export interface ValidateResponse {
   ok: boolean;
+  disabled?: boolean;
+  error?: string;
   summary: Record<UpstreamHealth, number>;
   results: Record<string, UpstreamStatus>;
   upstreams: string[];
@@ -149,6 +155,7 @@ export interface ValidateResponse {
 
 export interface ProbeResponse {
   ok: boolean;
+  disabled?: boolean;
   error?: string;
   ms?: number;
   upstreams?: string[];

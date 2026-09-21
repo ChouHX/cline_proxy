@@ -9,6 +9,7 @@ import {
   ScrollArea,
   Select,
   Stack,
+  Switch,
   Table,
   Text,
   Tooltip,
@@ -17,7 +18,7 @@ import { notifications } from '@mantine/notifications';
 import { IconDownload, IconRadar } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 
-import { fetchOfficialModels, getModels, probeModel, savePerModel, testModel, validateUpstreams } from '../api/client';
+import { fetchOfficialModels, getModels, probeModel, saveDisabledModels, savePerModel, testModel, validateUpstreams } from '../api/client';
 import type { ModelConfig, ModelsResponse, PinMode, SortMode, SubscriptionItem, TestResponse } from '../api/types';
 import { EmptyBlock, ErrorBlock, LoadingBlock, PageHeader, Panel } from '../components/PageKit';
 import TestResultView from '../components/TestResultView';
@@ -31,6 +32,7 @@ export default function ModelsPage() {
   const { data, loading, error, reload } = useAsyncData<ModelsResponse>(() => getModels(), [token]);
 
   const [subs, setSubs] = useState<SubscriptionItem[]>([]);
+  const [disabled, setDisabled] = useState<string[]>([]);
   const [pending, setPending] = useState<string[]>([]);
   const [probingAll, setProbingAll] = useState(false);
   const [probeLabel, setProbeLabel] = useState('');
@@ -38,7 +40,10 @@ export default function ModelsPage() {
   const [modal, setModal] = useState<{ model: string; result: TestResponse } | null>(null);
 
   useEffect(() => {
-    if (data) setSubs(data.subscription);
+    if (data) {
+      setSubs(data.subscription);
+      setDisabled(data.disabledModels || []);
+    }
   }, [data]);
 
   const isPending = (id: string) => pending.includes(id);
@@ -96,6 +101,30 @@ export default function ModelsPage() {
       void persistCfg(item, { ...item.config, upstreams: ups });
     } else {
       void persistCfg(item, { ...item.config, upstreams: [], exclude: [] });
+    }
+  };
+
+  // 禁用 / 恢复转发：整表覆盖保存，失败则回滚本地状态
+  const toggleDisabled = async (id: string, on: boolean) => {
+    const prev = disabled;
+    const next = on ? [...new Set([...disabled, id])] : disabled.filter((x) => x !== id);
+    setDisabled(next);
+    mark(id, true);
+    try {
+      const r = await saveDisabledModels(next);
+      setDisabled(r.disabledModels || next);
+      notifications.show({
+        message: on ? `${id} 已禁用：请求将直接返回 500` : `${id} 已恢复转发`,
+        color: on ? 'warn' : 'health',
+      });
+    } catch (e) {
+      setDisabled(prev);
+      notifications.show({
+        message: `禁用状态保存失败：${e instanceof Error ? e.message : '未知错误'}`,
+        color: 'red',
+      });
+    } finally {
+      mark(id, false);
     }
   };
 
@@ -250,11 +279,17 @@ export default function ModelsPage() {
                 {subs.map((item) => {
                   const m = item.meta;
                   const busy = isPending(item.id);
+                  const isOff = disabled.includes(item.id);
                   return (
-                    <Table.Tr key={item.id}>
+                    <Table.Tr key={item.id} style={isOff ? { opacity: 0.6 } : undefined}>
                       <Table.Td>
                         <Code fz={12}>{item.id}</Code>
                         <Group gap={5} mt={5} wrap="wrap">
+                          {isOff ? (
+                            <Badge variant="light" color="red" size="xs" radius="sm">
+                              已禁用转发
+                            </Badge>
+                          ) : null}
                           {m?.pinnable ? (
                             <Badge variant="light" color="health" size="xs" radius="sm">
                               可精确钉住 · {m.pipeline === 'planner' ? 'Vercel' : 'OpenRouter'}
@@ -346,16 +381,31 @@ export default function ModelsPage() {
                       <Table.Td>
                         <Group gap={5} wrap="nowrap">
                           <Tooltip label="用零 token 消耗的假上游请求刷新渠道清单" withArrow>
-                            <Button size="compact-xs" variant="default" disabled={busy} onClick={() => runProbe(item.id)}>
+                            <Button size="compact-xs" variant="default" disabled={busy || isOff} onClick={() => runProbe(item.id)}>
                               探测
                             </Button>
                           </Tooltip>
-                          <Button size="compact-xs" variant="default" disabled={busy} onClick={() => runTest(item)}>
+                          <Button size="compact-xs" variant="default" disabled={busy || isOff} onClick={() => runTest(item)}>
                             测试
                           </Button>
-                          <Button size="compact-xs" variant="default" disabled={busy} onClick={() => runValidate(item)}>
+                          <Button size="compact-xs" variant="default" disabled={busy || isOff} onClick={() => runValidate(item)}>
                             校验
                           </Button>
+                          <Tooltip
+                            label={isOff ? '恢复转发' : '禁用后不再转发，客户端会收到 500「该模型已被禁用」'}
+                            withArrow
+                          >
+                            <Switch
+                              size="xs"
+                              color="red"
+                              ml={4}
+                              disabled={busy}
+                              checked={isOff}
+                              onChange={(e) => void toggleDisabled(item.id, e.currentTarget.checked)}
+                              label="禁用"
+                              styles={{ label: { fontSize: 11.5, paddingInlineStart: 6 } }}
+                            />
+                          </Tooltip>
                         </Group>
                       </Table.Td>
                     </Table.Tr>
@@ -381,6 +431,10 @@ export default function ModelsPage() {
         <Text fz={11.5} c="dimmed" lh={1.8}>
           探测 / 测试 / 校验都会向上游发出极小额的真实请求（每次约 0.0002 美元级）。严格钉住模式下失败会直接报错，
           改用「优先+回退」可让网关在失败时自动落到后面的渠道。
+        </Text>
+        <Text fz={11.5} c="dimmed" lh={1.8} mt={6}>
+          禁用后该模型不再转发任何上游请求，调用方会收到 <Code>500</Code>「该模型已被禁用」，同时不计入请求历史；
+          禁用模型仍保留在 <Code>/v1/models</Code> 列表中，方便客户端给出明确报错而不是静默消失。
         </Text>
       </Panel>
     </Box>

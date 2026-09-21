@@ -55,6 +55,10 @@ const DEFAULT_CONFIG = {
   // 全部失败才把最后一个错误透传给客户端；exclude 中的上游永不被使用（自动模式下注入排除偏好）。
   // upstream 为旧版单上游兼容镜像（取列表第一个），maxRetries 已退役（旧值仅作回滚兼容保留在文件里）。
   perModel: {},
+  // 已禁用模型：命中的请求不再向上游转发，直接返回 500 并提示。
+  // 刻意不从 /v1/models 里剔除——客户端（如 Cline）的模型选择器常带固定清单，
+  // 保留在列表中才能让被禁用的模型得到明确报错，而不是静默消失查不到原因。
+  disabledModels: [],
 };
 
 function loadJson(file, fallback) {
@@ -76,6 +80,10 @@ if ((!Array.isArray(config.accounts) || config.accounts.length === 0) && config.
   saveConfig();
 }
 config.accountMode = config.accountMode === 'roundrobin' ? 'roundrobin' : 'single';
+
+// 禁用列表归一化：去重、去空白，避免历史脏数据让禁用判断失效
+if (!Array.isArray(config.disabledModels)) config.disabledModels = [];
+config.disabledModels = [...new Set(config.disabledModels.map((s) => String(s).trim()).filter(Boolean))];
 
 // perModel 配置升级：旧版单 upstream 迁移为有序多上游列表（upstream 保留为回滚兼容镜像）
 (function migratePerModel() {
@@ -143,6 +151,14 @@ function authOK(req) {
 function unauthorized(res) {
   return sendJSON(res, 401, { error: { message: 'unauthorized: 代理密钥缺失或错误', type: 'auth_error' } });
 }
+
+// 模型禁用：命中后不触达任何上游，也不计入历史，直接以 500 明确告知客户端
+const MODEL_DISABLED_MESSAGE = '该模型已被禁用';
+const isModelDisabled = (modelId) => config.disabledModels.includes(String(modelId ?? '').trim());
+const modelDisabledBody = () => ({
+  error: { message: MODEL_DISABLED_MESSAGE, type: 'model_disabled', code: 'model_disabled' },
+});
+const modelDisabled = (res) => sendJSON(res, 500, modelDisabledBody());
 function publicProxyBase() {
   return config.publicBaseUrl
     ? `${config.publicBaseUrl.replace(/\/+$/, '')}/v1`
@@ -793,6 +809,8 @@ async function handleChat(req, res) {
   try { body = JSON.parse(raw.toString('utf8')); } catch { return sendJSON(res, 400, { error: { message: 'invalid JSON body' } }); }
   const modelId = body.model;
   if (!modelId) return sendJSON(res, 400, { error: { message: 'model is required' } });
+  // 禁用模型在任何上游选择之前短路：不走故障转移、不消耗账号额度、不写请求历史
+  if (isModelDisabled(modelId)) return modelDisabled(res);
 
   const cfg = config.perModel[modelId] || {};
   const targets = buildAttempts(modelId, cfg).map((a) => a.upstream).filter(Boolean);
@@ -997,11 +1015,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/api/models') {
       const cat = await catalog();
       const sub = config.knownModels.map((id) => ({ id, config: config.perModel[id] || {}, meta: META.models[id] || null }));
-      return sendJSON(res, 200, { subscription: sub, catalogCount: cat.length, catalog: cat, proxyBase: publicProxyBase(), officialFetch: META.officialModelsFetch || null });
+      return sendJSON(res, 200, { subscription: sub, disabledModels: config.disabledModels, catalogCount: cat.length, catalog: cat, proxyBase: publicProxyBase(), officialFetch: META.officialModelsFetch || null });
     }
     if (req.method === 'POST' && p === '/api/probe') {
       const { model } = await JSON.parse(await readBody(req).then((b) => b.toString()));
       if (!model) return sendJSON(res, 400, { error: 'model required' });
+      if (isModelDisabled(model)) return sendJSON(res, 200, { ok: false, disabled: true, error: MODEL_DISABLED_MESSAGE });
       const r = await probeModel(model);
       return sendJSON(res, r.ok ? 200 : 502, r);
     }
@@ -1009,6 +1028,9 @@ const server = http.createServer(async (req, res) => {
       // 临时配置可带 upstreams/exclude（数组）或旧版 upstream（单值），完整走故障转移链路
       const { model, upstream, upstreams, exclude } = await JSON.parse(await readBody(req).then((b) => b.toString()));
       if (!model) return sendJSON(res, 400, { error: 'model required' });
+      if (isModelDisabled(model)) {
+        return sendJSON(res, 200, { ok: false, disabled: true, error: MODEL_DISABLED_MESSAGE, targets: [], exclude: [], trace: [] });
+      }
       const t0 = Date.now();
       const cfg = { ...(config.perModel[model] || {}) };
       if (upstreams !== undefined) cfg.upstreams = upstreams;
@@ -1097,6 +1119,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && p === '/api/validate-upstreams') {
       const { model } = JSON.parse(await readBody(req).then((b) => b.toString()));
       if (!model) return sendJSON(res, 400, { error: { message: 'model required' } });
+      if (isModelDisabled(model)) return sendJSON(res, 200, { ok: false, disabled: true, error: MODEL_DISABLED_MESSAGE, summary: {}, results: {}, upstreams: [] });
       const results = await validateUpstreams(model);
       const summary = { ok: 0, limited: 0, bad: 0, auth: 0, unknown: 0 };
       for (const r of Object.values(results)) summary[r.status] = (summary[r.status] || 0) + 1;
@@ -1149,9 +1172,10 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (req.method === 'GET' && p === '/api/history') return sendJSON(res, 200, { history: META.history });
-    if (req.method === 'GET' && p === '/api/config') return sendJSON(res, 200, { port: config.port, perModel: config.perModel, knownModels: config.knownModels });
+    if (req.method === 'GET' && p === '/api/config') return sendJSON(res, 200, { port: config.port, perModel: config.perModel, knownModels: config.knownModels, disabledModels: config.disabledModels });
     if (req.method === 'POST' && p === '/api/config') {
       const body = JSON.parse(await readBody(req).then((b) => b.toString()));
+      let dirty = false;
       if (body.perModel) {
         for (const [m, c] of Object.entries(body.perModel)) {
           const normalize = (v) => [...new Set((Array.isArray(v) ? v : []).map((s) => String(s).trim()).filter(Boolean))].slice(0, 10);
@@ -1168,9 +1192,15 @@ const server = http.createServer(async (req, res) => {
             sort: ['cost', 'ttft', 'tps'].includes(c.sort) ? c.sort : null,
           };
         }
-        saveConfig();
+        dirty = true;
       }
-      return sendJSON(res, 200, { ok: true });
+      // 禁用列表整表替换；上限只是防呆，正常模型数远低于此
+      if (Array.isArray(body.disabledModels)) {
+        config.disabledModels = [...new Set(body.disabledModels.map((s) => String(s).trim()).filter(Boolean))].slice(0, 1000);
+        dirty = true;
+      }
+      if (dirty) saveConfig();
+      return sendJSON(res, 200, { ok: true, disabledModels: config.disabledModels });
     }
     if (req.method === 'GET' && (p === '/v1/models' || p === '/api/v1/models' || p === '/models')) {
       // 默认只暴露订阅模型，避免目录模型淹没客户端的模型选择器；exposeCatalog=true 时合并完整目录

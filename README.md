@@ -189,6 +189,7 @@ location / {
 | `exposeCatalog` | `true` 时代理的 `/v1/models` 会合并 Cline 公开目录模型；默认 `false` 只返回订阅模型（避免客户端模型列表被淹没） |
 | `knownModels` | 订阅模型清单（控制台主表） |
 | `perModel` | 每模型的钉住配置：`{ upstream, pinMode: strict|preferred, sort: cost|ttft|tps, maxRetries }` |
+| `disabledModels` | 已禁用转发的模型 ID 列表：命中后不触达任何上游、不计入请求历史，直接返回 `500`「该模型已被禁用」；模型仍保留在 `/v1/models` 中，便于客户端给出明确报错而不是静默消失 |
 | `apiKey` | 旧版单 key 字段，启动时自动迁移进 `accounts` |
 
 ---

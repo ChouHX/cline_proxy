@@ -163,6 +163,10 @@ export const validateUpstreams = (model: string) =>
 export const savePerModel = (perModel: Record<string, Partial<ModelConfig>>) =>
   post<{ ok: boolean }>('/api/config', { perModel });
 
+/** 覆盖式保存禁用模型列表：命中的请求不再转发，直接返回 500 */
+export const saveDisabledModels = (disabledModels: string[]) =>
+  post<{ ok: boolean; disabledModels: string[] }>('/api/config', { disabledModels });
+
 export const fetchOfficialModels = () =>
   post<OfficialFetchResult & { ok: boolean }>('/api/fetch-official-models', {});
 
