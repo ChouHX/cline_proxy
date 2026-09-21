@@ -109,28 +109,27 @@ export function UsagePanel({
   const limits = usage.limits || [];
   return (
     <Stack gap="md">
-      <Group gap="xs" wrap="wrap">
-        {account ? (
-          <Badge variant="light" color="control" size="sm" radius="sm">
-            {account}
-          </Badge>
-        ) : null}
-        {usage.plan?.displayName ? (
-          <Badge variant="light" color="ink" size="sm" radius="sm">
-            {usage.plan.displayName}
-          </Badge>
-        ) : null}
+      <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xs">
+        <Box style={{ minWidth: 0 }}>
+          <Text fw={600} fz={14} truncate>
+            {account || '账号'}
+          </Text>
+          {usage.plan?.displayName ? (
+            <Text fz={11.5} c="dimmed" truncate>
+              {usage.plan.displayName}
+            </Text>
+          ) : null}
+        </Box>
         {usage.plan?.canceledAt ? (
-          <Tooltip label={`已于 ${new Date(usage.plan.canceledAt).toLocaleDateString()} 取消，到期后不再续费`} withArrow>
-            <Badge variant="light" color="warn" size="sm" radius="sm">
+          <Tooltip
+            label={`已于 ${new Date(usage.plan.canceledAt).toLocaleDateString()} 取消，到期后不再续费`}
+            withArrow
+          >
+            <Badge variant="light" color="warn" size="sm" radius="sm" style={{ flex: 'none' }}>
               已取消续费
             </Badge>
           </Tooltip>
         ) : null}
-        <Text fz={11} c="dimmed">
-          更新于 {fmtTime(usage.fetchedAt)}
-          {pollMinutes ? ` · 每 ${pollMinutes} 分钟自动刷新` : ''}
-        </Text>
       </Group>
 
       {limits.length === 0 ? (
@@ -162,6 +161,11 @@ export function UsagePanel({
           })}
         </Stack>
       )}
+
+      <Text fz={10.5} c="dimmed">
+        更新于 {fmtTime(usage.fetchedAt)}
+        {pollMinutes ? ` · 每 ${pollMinutes} 分钟刷新` : ''}
+      </Text>
     </Stack>
   );
 }

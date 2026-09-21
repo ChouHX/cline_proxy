@@ -146,7 +146,7 @@ export default function OverviewPage() {
           </Text>
         </Panel>
 
-        <Panel>
+        <Box>
           <Group justify="space-between" align="center" mb="sm" wrap="wrap">
             <Text fw={600} fz={13.5}>
               账号额度
@@ -156,22 +156,25 @@ export default function OverviewPage() {
             </Text>
           </Group>
           {usageAccounts.length === 0 ? (
-            <Text fz={12.5} c="dimmed">
-              尚未配置启用的账号，无法采集额度。
-            </Text>
+            <Panel>
+              <Text fz={12.5} c="dimmed">
+                尚未配置启用的账号，无法采集额度。
+              </Text>
+            </Panel>
           ) : (
-            <Stack gap="xl">
+            <SimpleGrid cols={{ base: 1, md: 2, xl: 3 }} spacing="md">
               {usageAccounts.map((name) => (
-                <UsagePanel
-                  key={name}
-                  account={name}
-                  usage={data?.usage.usage[name]}
-                  pollMinutes={data?.usage.pollMinutes}
-                />
+                <Panel key={name}>
+                  <UsagePanel
+                    account={name}
+                    usage={data?.usage.usage[name]}
+                    pollMinutes={data?.usage.pollMinutes}
+                  />
+                </Panel>
               ))}
-            </Stack>
+            </SimpleGrid>
           )}
-        </Panel>
+        </Box>
 
         <Panel p={0}>
           <Group justify="space-between" align="center" p="md" pb="sm">
