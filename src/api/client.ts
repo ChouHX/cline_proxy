@@ -1,4 +1,5 @@
 import type {
+  AccountCooldown,
   AccountDailyUsage,
   AccountUsage,
   AccountsResponse,
@@ -145,6 +146,10 @@ export const saveAccounts = (payload: {
 
 export const testAccount = (key: string) =>
   post<{ ok: boolean; ms: number; model?: string; error?: string; note?: string }>('/api/accounts/test', { key });
+
+/** 手动把账号移出冷宫；额度仍打满时下一次轮询会重新入池 */
+export const clearCooldown = (name: string) =>
+  post<{ ok: boolean; cooldowns: Record<string, AccountCooldown> }>('/api/accounts/cooldown', { name, clear: true });
 
 export const saveSecurity = (payload: {
   proxyKey?: string;

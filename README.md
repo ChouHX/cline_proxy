@@ -300,6 +300,27 @@ POST /api/usage/refresh  → 立即刷新全部账号额度（控制台的「刷
 
 进度条配色：已用 <50% 绿、50–79% 橙、≥80% 红。
 
+### 账号冷宫（冷却池）
+
+轮询会自动跳过已触发限额的账号，两条入池路径：
+
+1. **额度快照判定**：任一时长额度 `percentUsed >= 100%` 即入池，释放时间取该窗口的 `resetsAt`。
+2. **请求中实时命中**：上游返回限额错误（如 `INFERENCE_CAP_ERROR: ... weekly Clinepass limit. The limit resets in 1d 21h`）
+   时立即入池，先用文案里的剩余时间兜底，随后异步刷新该账号额度、用 `resetsAt` 校正。实时入池带
+   30 秒保护期，期间不会被紧随其后、尚显示未满的额度快照撤销。
+
+释放时间优先级 **月额度 > 周额度 > 5 小时额度**：多个窗口同时打满时取优先级最高（恢复最晚）的那个窗口的重置时刻；
+已入池的账号只有升级到更高优先级窗口才会重设释放时间，不会被短窗口时间反复顺延。
+
+出池条件：额度快照确认恢复、到达释放时刻、或手动解除。全部账号都在冷宫时降级使用「最早释放」的账号，
+保证服务不至于完全不可用（上游仍会返回限额错误，客户端能看到明确原因）。冷宫记录持久化在 `metadata.json` 的
+`cooldowns` 字段，重启保留；启动时会清掉已过期的记录。
+
+```
+GET  /api/accounts           → 含 cooldowns：{ 账号名: { until, window, reason, source, since, hits } }
+POST /api/accounts/cooldown  → { "name": "账号1", "clear": true } 手动解除冷宫
+```
+
 
 代理同时做了兼容性标准化：解包 Cline 的 `{"data":...}` 包装为标准 OpenAI 格式、错误统一为
 `{"error":{"message":...}}`、附加 `X-Cline-Target-Upstream / X-Cline-Actual-Upstream / X-Cline-Account` 等响应头。

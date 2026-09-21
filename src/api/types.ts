@@ -86,11 +86,27 @@ export interface AccountStats {
   lastError: string | null;
 }
 
+/** 冷宫记录：账号命中额度上限后的冷却状态 */
+export interface AccountCooldown {
+  /** 释放时刻（毫秒时间戳） */
+  until: number;
+  /** 触发冷却的额度窗口；null 表示未识别出具体窗口 */
+  window: 'monthly' | 'weekly' | 'five_hour' | null;
+  reason: string;
+  /** 入池来源：额度快照判定 / 请求中实时命中 / 手动 */
+  source?: 'usage' | 'runtime' | 'manual';
+  since: number;
+  hits: number;
+  lastHitAt?: number;
+}
+
 export interface AccountsResponse {
   accounts: Account[];
   mode: 'single' | 'roundrobin';
   active: number;
   stats: Record<string, AccountStats>;
+  /** 账号名 -> 冷宫记录；不在其中的账号才会参与轮询 */
+  cooldowns: Record<string, AccountCooldown>;
 }
 
 export interface SecurityResponse {

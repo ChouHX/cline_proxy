@@ -1,4 +1,5 @@
 import {
+  Badge,
   Box,
   Button,
   Checkbox,
@@ -9,12 +10,13 @@ import {
   Table,
   Text,
   TextInput,
+  Tooltip,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconPlus, IconRefresh, IconTrash } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 
-import { getAccounts, getUsage, refreshUsage, saveAccounts, testAccount } from '../api/client';
+import { clearCooldown, getAccounts, getUsage, refreshUsage, saveAccounts, testAccount } from '../api/client';
 import type { Account, AccountUsage } from '../api/types';
 import { EmptyBlock, ErrorBlock, LoadingBlock, PageHeader, Panel } from '../components/PageKit';
 import { UsageBadges } from '../components/UsageMeter';
@@ -22,6 +24,23 @@ import { useRefresh } from '../data/RefreshContext';
 import { useAsyncData } from '../hooks/useAsyncData';
 
 const fmt = (ts?: number) => (ts ? new Date(ts).toLocaleTimeString() : '—');
+
+const QUOTA_WINDOW_LABEL: Record<string, string> = {
+  monthly: '月额度',
+  weekly: '周额度',
+  five_hour: '5 小时额度',
+};
+
+/** 冷宫剩余时间：与额度卡片的相对时间保持同一种口吻 */
+const untilLabel = (ts: number) => {
+  const ms = ts - Date.now();
+  if (!(ms > 0)) return '即将释放';
+  const minutes = Math.round(ms / 60e3);
+  if (minutes < 60) return `${Math.max(1, minutes)} 分钟后释放`;
+  const hours = Math.floor(ms / 3600e3);
+  if (hours < 48) return `${hours} 小时后释放`;
+  return `${Math.round(hours / 24)} 天后释放`;
+};
 
 export default function AccountsPage() {
   const { token } = useRefresh();
@@ -49,6 +68,18 @@ export default function AccountsPage() {
   }, [accData]);
 
   const stats = accData?.stats || {};
+  const cooldowns = accData?.cooldowns || {};
+
+  // 手动解除冷宫：额度若仍打满，下一次轮询会重新入池
+  const clearCool = async (name: string) => {
+    try {
+      await clearCooldown(name);
+      notifications.show({ message: `${name} 已解除冷宫`, color: 'health' });
+      reload();
+    } catch (e) {
+      notifications.show({ message: `解除失败：${e instanceof Error ? e.message : '未知错误'}`, color: 'red' });
+    }
+  };
 
   const pullUsage = async () => {
     setRefreshingUsage(true);
@@ -162,6 +193,10 @@ export default function AccountsPage() {
             onChange={(e) => setShowKeys(e.currentTarget.checked)}
           />
         </Group>
+        <Text fz={11.5} c="dimmed" mt={8} lh={1.8}>
+          轮询会自动跳过「冷宫」中的账号：任一时长额度打满即入池，释放时间按 月额度 → 周额度 → 5
+          小时额度 的优先级取对应重置时刻（同时打满则以恢复最晚的那个为准）。额度恢复或到点后自动重新参与轮询。
+        </Text>
       </Panel>
 
       <Panel p={0}>
@@ -238,6 +273,20 @@ export default function AccountsPage() {
                       </Table.Td>
                       <Table.Td>
                         <UsageBadges usage={usageMap[a.name]} />
+                        {cooldowns[a.name] ? (
+                          <Tooltip
+                            label={`${QUOTA_WINDOW_LABEL[cooldowns[a.name].window || ''] || '额度'}打满 · ${
+                              cooldowns[a.name].reason || '已入冷宫'
+                            } · 命中 ${cooldowns[a.name].hits || 1} 次`}
+                            withArrow
+                            multiline
+                            maw={280}
+                          >
+                            <Badge variant="light" color="red" size="xs" radius="sm" mt={5}>
+                              冷宫 · {untilLabel(cooldowns[a.name].until)}
+                            </Badge>
+                          </Tooltip>
+                        ) : null}
                       </Table.Td>
                       <Table.Td>
                         <Group gap={5} wrap="nowrap">
@@ -249,6 +298,11 @@ export default function AccountsPage() {
                           >
                             测试
                           </Button>
+                          {cooldowns[a.name] ? (
+                            <Button size="compact-xs" variant="subtle" color="warn" onClick={() => void clearCool(a.name)}>
+                              解除冷宫
+                            </Button>
+                          ) : null}
                           <Button
                             size="compact-xs"
                             variant="subtle"

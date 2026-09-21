@@ -116,22 +116,165 @@ if (!isConfigured()) {
   console.warn('[提示] 尚未配置上游 API Key：打开控制台「账号管理」添加账号并保存即可；服务已启动。');
 }
 
-// 账号选择：roundrobin 在启用的账号间轮询；single 使用 activeAccount 指定的账号
+// ---------- 冷却池（冷宫） ----------
+// 命中限额的账号不再参与轮询，直到对应额度的重置时刻到来。
+// 释放时间优先级：月额度 > 周额度 > 5 小时额度 —— 多个窗口同时打满时取优先级最高
+// （即恢复最晚）的窗口的重置时间，避免被短窗口的时间过早放出。
+const QUOTA_WINDOW_RANK = { monthly: 3, weekly: 2, five_hour: 1 };
+const QUOTA_WINDOW_LABEL = { monthly: '月额度', weekly: '周额度', five_hour: '5 小时额度' };
+const QUOTA_WINDOW_FALLBACK_MS = { monthly: 30 * 86400e3, weekly: 7 * 86400e3, five_hour: 5 * 3600e3 };
+
+/** 冷却中的账号；已到释放时刻的视为可用 */
+function cooldownOf(name) {
+  const c = (META.cooldowns || {})[name];
+  if (!c || !(c.until > Date.now())) return null;
+  return c;
+}
+const isCooling = (name) => !!cooldownOf(name);
+
+/** 从额度快照挑出「已打满且优先级最高」的窗口；返回 null 表示无需冷却 */
+function quotaHitFromUsage(usage) {
+  if (!usage || !usage.ok) return null; // 取不到额度（网络问题）不算限额
+  const full = (usage.limits || []).filter((l) => Number(l.percentUsed) >= 100);
+  if (!full.length) return null;
+  full.sort((a, b) => (QUOTA_WINDOW_RANK[b.type] || 0) - (QUOTA_WINDOW_RANK[a.type] || 0));
+  const top = full[0];
+  const resetMs = top.resetsAt ? new Date(top.resetsAt).getTime() : 0;
+  return {
+    window: top.type,
+    percent: top.percentUsed,
+    resetMs: Number.isFinite(resetMs) ? resetMs : 0,
+    windows: full.map((l) => l.type),
+  };
+}
+
+/** 打入冷宫。until 为 0 时按窗口周期兜底；已有冷却只在升级到更高优先级窗口时才重设释放时间 */
+function coolAccount(name, { window: win = null, until = 0, reason = '', source = 'usage' } = {}) {
+  if (!name) return null;
+  const now = Date.now();
+  const w = QUOTA_WINDOW_RANK[win] ? win : null;
+  const cur = cooldownOf(name);
+  if (cur && (QUOTA_WINDOW_RANK[w] || 0) <= (QUOTA_WINDOW_RANK[cur.window] || 0)) {
+    // 同窗口或更低优先级：保留原释放时间，只累计命中次数，避免释放时间被反复顺延
+    cur.hits = (cur.hits || 1) + 1;
+    cur.lastHitAt = now;
+    if (reason) cur.reason = reason;
+    saveMeta();
+    return cur;
+  }
+  const target = until > now ? until : now + (QUOTA_WINDOW_FALLBACK_MS[w] || 3600e3);
+  const next = { until: target, window: w, reason: reason || '', source, since: now, hits: (cur?.hits || 0) + 1 };
+  META.cooldowns[name] = next;
+  console.log(`[冷宫] 账号「${name}」${w ? QUOTA_WINDOW_LABEL[w] : '额度'}命中${reason ? `（${reason}）` : ''}，释放于 ${new Date(target).toLocaleString()}`);
+  saveMeta();
+  return next;
+}
+
+/** 出池：额度恢复 / 释放时刻已到 / 手动解除 */
+function releaseCooldown(name, why = '额度已恢复') {
+  if (!META.cooldowns?.[name]) return false;
+  delete META.cooldowns[name];
+  console.log(`[冷宫] 账号「${name}」已释放（${why}）`);
+  saveMeta();
+  return true;
+}
+
+// 实时命中（上游 429）入池后的保护期：这段时间内不接受「快照显示未满」的释放判定，
+// 否则紧随其后的额度刷新会把刚设的冷却立刻撤销，实时检测形同虚设
+const RUNTIME_COOLDOWN_GUARD_MS = 30e3;
+
+/** 用最新额度快照重算冷却池：打满入池，确认恢复或到点出池 */
+function applyCooldowns() {
+  META.cooldowns = META.cooldowns || {};
+  const names = new Set([...Object.keys(META.usage || {}), ...Object.keys(META.cooldowns)]);
+  for (const name of names) {
+    const hit = quotaHitFromUsage(META.usage?.[name]);
+    const cur = META.cooldowns[name];
+    if (hit) {
+      coolAccount(name, {
+        window: hit.window,
+        until: hit.resetMs > Date.now() ? hit.resetMs : 0,
+        reason: `${QUOTA_WINDOW_LABEL[hit.window] || hit.window}已用 ${hit.percent}%`,
+        source: 'usage',
+      });
+      continue;
+    }
+    if (!cur) continue;
+    if (cur.until <= Date.now()) {
+      releaseCooldown(name, '释放时刻已到');
+      continue;
+    }
+    // 手动冷宫只认时间与手动解除，不被额度快照推翻
+    if (cur.source === 'manual') continue;
+    // 其余来源需要「采集时间晚于入池时间（实时入池再加保护期）」的快照才有资格判定恢复
+    const snapAt = META.usage?.[name]?.fetchedAt || 0;
+    const guard = cur.source === 'runtime' ? RUNTIME_COOLDOWN_GUARD_MS : 0;
+    if (snapAt > (cur.since || 0) + guard) releaseCooldown(name, '额度已恢复');
+  }
+}
+
+// 从上游限额文案里识别窗口与重置剩余时间（例："You have reached your weekly Clinepass limit.
+// The limit resets in 1d 21h"），用于额度快照尚未刷新时的即时入池
+function parseQuotaError(text) {
+  const s = String(text || '');
+  if (!s || !/INFERENCE_CAP_ERROR|reached your [a-z0-9 -]*limit|limit resets in|quota exceeded/i.test(s)) return null;
+  const win = /monthly/i.test(s)
+    ? 'monthly'
+    : /weekly/i.test(s)
+      ? 'weekly'
+      : /(5[ -]?hour|five[ -]?hour|hourly|five_hour)/i.test(s)
+        ? 'five_hour'
+        : null;
+  const m = /resets in\s+(?:(\d+)\s*d(?:ays?)?)?\s*(?:(\d+)\s*h(?:ours?)?)?\s*(?:(\d+)\s*m(?:in(?:ute)?s?)?)?/i.exec(s);
+  const ms = m ? ((Number(m[1]) || 0) * 86400 + (Number(m[2]) || 0) * 3600 + (Number(m[3]) || 0) * 60) * 1000 : 0;
+  return { window: win, ms: ms > 0 ? ms : 0 };
+}
+
+const QUOTA_REFRESH_MIN_MS = 60e3; // 同一账号的限额纠偏刷新节流
+const quotaRefreshedAt = new Map();
+/** 请求过程中实时命中限额：立即入池，并异步拉一次额度用权威 resetsAt 校正释放时间 */
+function noteQuotaHit(name, text) {
+  if (!name) return false;
+  const hit = parseQuotaError(text);
+  if (!hit) return false;
+  coolAccount(name, {
+    window: hit.window,
+    until: hit.ms ? Date.now() + hit.ms : 0,
+    reason: hit.window ? `${QUOTA_WINDOW_LABEL[hit.window]}已用尽` : '上游返回限额',
+    source: 'runtime',
+  });
+  if (Date.now() - (quotaRefreshedAt.get(name) || 0) > QUOTA_REFRESH_MIN_MS) {
+    quotaRefreshedAt.set(name, Date.now());
+    refreshUsageFor(name).catch(() => {});
+  }
+  return true;
+}
+
+// 账号选择：roundrobin 在启用的账号间轮询（自动跳过冷宫）；single 用 activeAccount 指定的账号，
+// 该账号在冷宫中时回落到第一个可用账号。
 let RR_COUNTER = 0;
 function enabledAccounts() {
   return (config.accounts || []).filter((a) => a && a.key && a.enabled !== false);
 }
 function pickAccount() {
-  const list = enabledAccounts();
-  if (!list.length) return { name: '默认', key: config.apiKey || '' };
-  if (config.accountMode === 'roundrobin' && list.length > 1) {
-    const a = list[RR_COUNTER % list.length];
+  const all = enabledAccounts();
+  if (!all.length) return { name: '默认', key: config.apiKey || '' };
+
+  const warm = all.filter((a) => !isCooling(a.name));
+  // 全部在冷宫时降级使用「最早释放」的账号，避免服务完全不可用：上游仍会按额度返回限额错误，
+  // 客户端至少能看到明确原因，而不是本地直接失败
+  const pool = warm.length
+    ? warm
+    : [all.reduce((best, a) => ((cooldownOf(a.name)?.until || 0) < (cooldownOf(best.name)?.until || 0) ? a : best), all[0])];
+
+  if (config.accountMode === 'roundrobin' && pool.length > 1) {
+    const a = pool[RR_COUNTER % pool.length];
     RR_COUNTER = (RR_COUNTER + 1) % 1000000000;
     return a;
   }
   const byIdx = config.accounts[config.activeAccount];
-  if (byIdx && byIdx.key && byIdx.enabled !== false) return byIdx;
-  return list[0];
+  if (byIdx && byIdx.key && byIdx.enabled !== false && !isCooling(byIdx.name)) return byIdx;
+  return pool[0];
 }
 const chatHeaders = (key) => ({
   'Content-Type': 'application/json',
@@ -452,6 +595,14 @@ function record(modelId, info) {
 // 该端点只读、不消耗订阅额度，因此可以放心定时轮询。
 META.usage = META.usage || {};
 
+// 冷却池（冷宫）：账号名 -> { until, window, reason, since, hits }
+// 命中额度上限的账号不再参与轮询，直到对应额度的重置时刻；释放时间由额度快照的 resetsAt 决定。
+META.cooldowns = META.cooldowns || {};
+// 启动先清掉已过释放时刻的记录，避免历史数据把账号一直关着
+for (const [name, c] of Object.entries(META.cooldowns)) {
+  if (!(c && c.until > Date.now())) delete META.cooldowns[name];
+}
+
 const USAGE_PATH = '/users/me/plan/usage-limits';
 const PLAN_PATH = '/users/me/plan';
 const ME_PATH = '/users/me';
@@ -502,8 +653,25 @@ async function refreshAllUsage() {
     }
   }));
   META.usageUpdatedAt = Date.now();
+  // 拿到新快照就重算冷却池：打满的入池，恢复的 / 到点的出池
+  applyCooldowns();
   saveMeta();
   return { ok: true, count: list.length };
+}
+
+/** 只刷新单个账号的额度快照（实时命中限额后校正冷却释放时间用） */
+async function refreshUsageFor(name) {
+  const acc = enabledAccounts().find((a) => a.name === name);
+  if (!acc) return null;
+  try {
+    META.usage[name] = await fetchAccountUsage(acc.key);
+  } catch (e) {
+    META.usage[name] = { ok: false, error: e.message || 'fetch failed', fetchedAt: Date.now() };
+  }
+  META.usageUpdatedAt = Date.now();
+  applyCooldowns();
+  saveMeta();
+  return META.usage[name];
 }
 
 // ---------- 用量统计（按天） ----------
@@ -768,6 +936,7 @@ async function runChatChain(req, body, modelId, cfg, { stream = false, attemptTi
             }
             try { json = JSON.parse(text); } catch {}
             const msg = errText(json?.error) || text.slice(0, 160) || netError;
+            noteQuotaHit(acc?.name, msg); // 流式同样即时入池
             trace.push({ upstream: attempt.upstream, status: up.status, ms, note: msg.slice(0, 160) });
             if (attempt.upstream) learnUpstreamStatus(modelId, attempt.upstream, msg);
             if (!attempt.upstream && (attempt.excludeList || []).length) learnAvailableProviders(modelId, msg);
@@ -788,6 +957,8 @@ async function runChatChain(req, body, modelId, cfg, { stream = false, attemptTi
         const r = await attemptOnce(modelId, body, attempt, ctrl.signal);
         const ms = Date.now() - t1;
         const note = r.netError || (r.status !== 200 ? errText(r.out?.error?.message).slice(0, 160) : 'ok');
+        // 命中限额：立刻把该账号打入冷宫，后续尝试与请求自动改用别的账号
+        if (r.status !== 200) noteQuotaHit(r.acc?.name, r.netError || errText(r.out?.error?.message));
         trace.push({ upstream: attempt.upstream, status: r.status, ms, note });
         if (r.status !== 200 && attempt.upstream) learnUpstreamStatus(modelId, attempt.upstream, errText(r.out?.error?.message));
         if (r.status !== 200 && !attempt.upstream && (attempt.excludeList || []).length) learnAvailableProviders(modelId, r.netError || note);
@@ -1061,6 +1232,8 @@ const server = http.createServer(async (req, res) => {
         mode: config.accountMode,
         active: config.activeAccount,
         stats: META.stats || {},
+        // 冷却池：账号命中限额后据此跳过轮询，直到 until 时刻
+        cooldowns: META.cooldowns || {},
       });
     }
     if (req.method === 'POST' && p === '/api/accounts') {
@@ -1081,6 +1254,15 @@ const server = http.createServer(async (req, res) => {
       // 账号池变了，立刻为新装/启用的账号拉一次额度（不阻塞响应）
       refreshAllUsage().catch(() => {});
       return sendJSON(res, 200, { ok: true, accounts: config.accounts.length, mode: config.accountMode, active: config.activeAccount });
+    }
+    if (req.method === 'POST' && p === '/api/accounts/cooldown') {
+      const body = JSON.parse(await readBody(req).then((b) => b.toString()));
+      const name = String(body.name || '').trim();
+      if (!name) return sendJSON(res, 400, { error: { message: 'name required' } });
+      // clear=false 可手动打入冷宫（默认兜底 1 小时）；默认是手动解除
+      if (body.clear === false) coolAccount(name, { until: 0, window: null, reason: '手动冷却', source: 'manual' });
+      else releaseCooldown(name, '手动解除');
+      return sendJSON(res, 200, { ok: true, cooldowns: META.cooldowns || {} });
     }
     if (req.method === 'POST' && p === '/api/accounts/test') {
       const { key } = JSON.parse(await readBody(req).then((b) => b.toString()));
